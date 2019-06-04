@@ -1,7 +1,7 @@
-extern crate oci;
-extern crate libcontainer;
-#[macro_use]
-extern crate lazy_static;
+//extern crate oci;
+//extern crate libcontainer;
+//#[macro_use]
+//extern crate lazy_static;
 #[macro_use]
 extern crate log;
 
@@ -10,7 +10,7 @@ use std::{io, thread};
 use std::io::Read;
 use futures::*;
 use log::LevelFilter;
-use lazy_static::{self, initialize};
+//use lazy_static::{self, initialize};
 
 mod grpc;
 
