@@ -17,7 +17,7 @@ mod grpc;
 fn main() {
     simple_logging::log_to_stderr(LevelFilter::Trace);
 
-    let mut server = grpc::start("unix:///var/run/kata-containers/cache2.sock", 1);
+    let mut server = grpc::start("vsock://-1", 2048);
 
     let (tx, rx) = oneshot::channel();
     thread::spawn(move || {
