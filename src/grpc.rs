@@ -1,6 +1,6 @@
 use std::sync::Arc;
-
 use grpcio::{ServerBuilder, EnvBuilder, Server};
+use futures::*;
 
 #[derive(Clone)]
 struct agentService;
@@ -21,7 +21,14 @@ impl protocols::agent_grpc::AgentService for agentService {
     fn read_stdout(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::ReadStreamRequest, sink: ::grpcio::UnarySink<protocols::agent::ReadStreamResponse>) {}
     fn read_stderr(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::ReadStreamRequest, sink: ::grpcio::UnarySink<protocols::agent::ReadStreamResponse>) {}
     fn close_stdin(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::CloseStdinRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
-    fn tty_win_resize(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::TtyWinResizeRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
+    fn tty_win_resize(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::TtyWinResizeRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {
+        info!("{:?}", req);
+        let empty = protocols::empty::Empty::new();
+        let f = sink
+            .success(empty)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
+    }
     fn update_interface(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::UpdateInterfaceRequest, sink: ::grpcio::UnarySink<protocols::types::Interface>) {}
     fn update_routes(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::UpdateRoutesRequest, sink: ::grpcio::UnarySink<protocols::agent::Routes>) {}
     fn list_interfaces(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::ListInterfacesRequest, sink: ::grpcio::UnarySink<protocols::agent::Interfaces>) {}
