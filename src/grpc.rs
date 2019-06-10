@@ -33,7 +33,14 @@ impl protocols::agent_grpc::AgentService for agentService {
     fn update_routes(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::UpdateRoutesRequest, sink: ::grpcio::UnarySink<protocols::agent::Routes>) {}
     fn list_interfaces(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::ListInterfacesRequest, sink: ::grpcio::UnarySink<protocols::agent::Interfaces>) {}
     fn list_routes(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::ListRoutesRequest, sink: ::grpcio::UnarySink<protocols::agent::Routes>) {}
-    fn start_tracing(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::StartTracingRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
+    fn start_tracing(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::StartTracingRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {
+        info!("{:?}", req);
+        let empty = protocols::empty::Empty::new();
+        let f = sink
+            .success(empty)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
+    }
     fn stop_tracing(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::StopTracingRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
     fn create_sandbox(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::CreateSandboxRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
     fn destroy_sandbox(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::DestroySandboxRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
