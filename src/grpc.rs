@@ -25,7 +25,7 @@ impl protocols::agent_grpc::AgentService for agentService {
     fn read_stderr(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::ReadStreamRequest, sink: ::grpcio::UnarySink<protocols::agent::ReadStreamResponse>) {}
     fn close_stdin(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::CloseStdinRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
     fn tty_win_resize(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::TtyWinResizeRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {
-        info!("tty_win_resize {:?} self.test=%d", req, self.test);
+        info!("tty_win_resize {:?} self.test={}", req, self.test);
         self.test = 1;
         let empty = protocols::empty::Empty::new();
         let f = sink
@@ -38,7 +38,7 @@ impl protocols::agent_grpc::AgentService for agentService {
     fn list_interfaces(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::ListInterfacesRequest, sink: ::grpcio::UnarySink<protocols::agent::Interfaces>) {}
     fn list_routes(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::ListRoutesRequest, sink: ::grpcio::UnarySink<protocols::agent::Routes>) {}
     fn start_tracing(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::StartTracingRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {
-        info!("start_tracing {:?} self.test=%d", req, self.test);
+        info!("start_tracing {:?} self.test={}", req, self.test);
         self.test = 2;
         let empty = protocols::empty::Empty::new();
         let f = sink
