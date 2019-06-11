@@ -57,12 +57,30 @@ impl protocols::agent_grpc::AgentService for agentService {
     fn copy_file(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::CopyFileRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
 }
 
+#[derive(Clone)]
+struct healthService;
+impl protocols::health_grpc::Health for healthService {
+    fn check(&mut self, ctx: ::grpcio::RpcContext, req: protocols::health::CheckRequest, sink: ::grpcio::UnarySink<protocols::health::HealthCheckResponse>) {}
+    fn version(&mut self, ctx: ::grpcio::RpcContext, req: protocols::health::CheckRequest, sink: ::grpcio::UnarySink<protocols::health::VersionCheckResponse>) {
+        info!("version {:?}", req);
+        let mut rep = protocols::health::VersionCheckResponse::new();
+        rep.agent_version = "a1".to_string();
+        rep.grpc_version = "g2".to_string();
+        let f = sink
+            .success(rep)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
+    }
+}
+
 pub fn start<S: Into<String>>(host: S, port: u16) -> Server {
     let env = Arc::new(EnvBuilder::new().build());
     let worker = agentService::default();
     let service = protocols::agent_grpc::create_agent_service(worker);
+    let hservice = protocols::health_grpc::create_health(healthService);
     let mut server = ServerBuilder::new(env)
         .register_service(service)
+        .register_service(hservice)
         .bind(host, port)
         .build()
         .unwrap();

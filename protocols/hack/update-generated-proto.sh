@@ -43,6 +43,7 @@ if [ $UPDATE_PROTOS ]; then
     get_source_version "github.com/kata-containers/agent" ""
     cp $GOPATH/src/github.com/kata-containers/agent/protocols/grpc/agent.proto ./protos/
     cp $GOPATH/src/github.com/kata-containers/agent/protocols/grpc/oci.proto ./protos/
+    cp $GOPATH/src/github.com/kata-containers/agent/protocols/grpc/health.proto ./protos/
     mkdir -p ./protos/github.com/kata-containers/agent/pkg/types/
     cp $GOPATH/src/github.com/kata-containers/agent/pkg/types/types.proto ./protos/github.com/kata-containers/agent/pkg/types/
 
@@ -55,6 +56,7 @@ if [ $UPDATE_PROTOS ]; then
 fi
 
 get_rs agent.proto
+get_rs health.proto
 get_rs github.com/kata-containers/agent/pkg/types/types.proto
 get_rs google/protobuf/empty.proto
 
