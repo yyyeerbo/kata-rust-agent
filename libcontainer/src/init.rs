@@ -3,11 +3,11 @@ use serde_derive;
 use serde;
 use serde_json;
 
-use libcontainer::configs::Network as ConfigNetwork;
-use libcontainer::configs::{Capabilities, Config, Rlimit};
-use libcontainer::error::*;
-use libcontainer::rootfs;
-use libcontainer::sync::{self, PROCREADY, PROCHOOKS};
+use crate::configs::Network as ConfigNetwork;
+use crate::configs::{Capabilities, Config, Rlimit};
+use crate::error::*;
+use crate::rootfs;
+use crate::sync::{self, PROCREADY, PROCHOOKS};
 
 use nix::unistd;
 use nix::unistd::Pid as NixPid;

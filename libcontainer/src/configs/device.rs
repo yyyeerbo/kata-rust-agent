@@ -34,7 +34,7 @@ pub struct BlockIODevice {
 	minor: i64,
 }
 
-#[derive(Serialzie, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct WeightDevice {
 	block: BlockIODevice,
 #[serde(default)]

@@ -7,6 +7,10 @@ error_chain! {
 	// foreign error conv to chain error
 	foreign_links {
 		Io(std::io::Error);
+		Nix(nix::Error);
+		Ffi(std::ffi::NulError);
+		Caps(caps::errors::Error);
+		Serde(serde_json::Error);
 	}
 	// define new errors
 	errors {

@@ -1,6 +1,11 @@
-use libcontainer::cgroups::Stats as CgroupStats;
-use libcontainer::intelrdt::Stats as RdtStats;
+// use crate::cgroups::Stats as CgroupStats;
+// use crate::intelrdt::Stats as RdtStats;
 
+struct CgroupStats {
+}
+
+struct RdtStats {
+}
 
 pub struct NetworkInterface {
 	name: String,

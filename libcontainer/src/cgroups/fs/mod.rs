@@ -1,4 +1,4 @@
-use libcontainer::cgroups::Manager as CgroupManager;
+use crate::cgroups::Manager as CgroupManager;
 
 pub struct Manager {
 }

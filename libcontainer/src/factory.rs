@@ -1,14 +1,14 @@
-use libcontainer::container::Container;
-use libcontainer::configs::validate::Validator;
-use libcontainer::configs::{Config, Cgroup};
-use libcontainer::cgroups::Manager as CgroupManager;
-use libcontainer::intelrdt::Manager as RdtManager;
-use libcontainer::errors::*;
-use libcontainer::cgroups::systemd::Manager as SystemdManager;
-use libcontainer::cgroups::fs::Manager as FsManager;
-use libcontainer::intelrdt::IntelRdtManager;
-use libcontainer::init::{self, Initer, INITSTANDARD};
-use libcontainer::sync::{self, SyncT, PROCERROR};
+use crate::container::Container;
+use crate::configs::validate::Validator;
+use crate::configs::{Config, Cgroup};
+use crate::cgroups::Manager as CgroupManager;
+use crate::intelrdt::Manager as RdtManager;
+use crate::errors::*;
+use crate::cgroups::systemd::Manager as SystemdManager;
+use crate::cgroups::fs::Manager as FsManager;
+use crate::intelrdt::IntelRdtManager;
+use crate::init::{self, Initer, INITSTANDARD};
+use crate::sync::{self, SyncT, PROCERROR};
 use oci::serialize;
 
 use std::env;

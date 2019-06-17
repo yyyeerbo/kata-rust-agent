@@ -1,3 +1,4 @@
+#[macro_use]
 extern crate error_chain;
 extern crate serde;
 extern crate serde_json;
@@ -5,25 +6,32 @@ extern crate serde_json;
 extern crate serde_derive;
 extern crate oci;
 extern crate caps;
+#[macro_use]
+extern crate scopeguard;
+extern crate prctl;
+#[macro_use]
+extern crate lazy_static;
+extern crate libc;
 
 
 pub mod errors;
-// pub mod factory;
 pub mod container;
 pub mod process;
-pub mod configs;
-pub mod devices;
 pub mod cgroups;
-pub mod init;
-pub mod rootfs;
-pub mod capabilities;
-pub mod console;
-pub mod stats;
-pub mod user;
 pub mod mount;
 pub mod specconv;
-pub mod intelrdt;
 pub mod sync;
+
+// pub mod factory;
+//pub mod configs;
+// pub mod devices;
+// pub mod init;
+// pub mod rootfs;
+// pub mod capabilities;
+// pub mod console;
+pub mod stats;
+// pub mod user;
+//pub mod intelrdt;
 
 
 #[cfg(test)]

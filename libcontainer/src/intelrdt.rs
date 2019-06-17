@@ -1,4 +1,6 @@
-use libcontainer::configs::{Stats, Config};
+use crate::configs::{Config};
+use crate::stats::Stats;
+use crate::errors::*;
 use std::sync::Mutex;
 
 pub trait Manager {
@@ -25,10 +27,10 @@ pub trait Manager {
 
 pub struct IntelRdtManager<'a> {
 	mutex: Mutex<i32>,
-	config: &'a Config,
+	config: &'a Config<'a>,
 	id: String,
 	path: String,
 }
 
-impl Manager for IntelRdtManager {
+impl<'a> Manager for IntelRdtManager<'a> {
 }

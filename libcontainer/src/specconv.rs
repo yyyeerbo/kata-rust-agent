@@ -1,28 +1,29 @@
 use oci::{self, Spec};
 use lazy_static;
 use nix::mount::MsFlags;
-use libcontainer::configs::namespaces;
-use libcontainer::configs::device::Device;
+// use crate::configs::namespaces;
+// use crate::configs::device::Device;
 use std::collections::HashMap;
 
+#[derive(Debug)]
 pub struct CreateOpts {
-	cgroup_name: String,
-	use_systemd_cgroup: bool,
-	no_pivot_root: bool,
-	no_new_keyring: bool,
-	spec: Option<Spec>,
-	rootless_euid: bool,
-	rootless_cgroup: bool,
+	pub cgroup_name: String,
+	pub use_systemd_cgroup: bool,
+	pub no_pivot_root: bool,
+	pub no_new_keyring: bool,
+	pub spec: Option<Spec>,
+	pub rootless_euid: bool,
+	pub rootless_cgroup: bool,
 }
-
+/*
 const WILDCARD: i32 = -1;
 
 lazy_static! {
 	static ref NAEMSPACEMAPPING: HashMap<&'static str, &'static str> = {
-		m = HashMap::new();
+		let mut m = HashMap::new();
 		m.insert(oci::PIDNAMESPACE, namespaces::NEWPID);
 		m.insert(oci::NETWORKNAMESPACE, namespaces::NEWNET);
-		m.insert(oci::UTSNAMESPACE, namespace::NEWUTS);
+		m.insert(oci::UTSNAMESPACE, namespaces::NEWUTS);
 		m.insert(oci::MOUNTNAMESPACE, namespaces::NEWNS);
 		m.insert(oci::IPCNAMESPACE, namespaces::NEWIPC);
 		m.insert(oci::USERNAMESPACE, namespaces::NEWUSER);
@@ -31,7 +32,7 @@ lazy_static! {
 	};
 
 	static ref MOUNTPROPAGATIONMAPPING: HashMap<&'static str, MsFlags> = {
-		m = HashMap::new();
+		let mut m = HashMap::new();
 		m.insert("rprivate", MsFlags::MS_PRIVATE | MsFlags::MS_REC);
 		m.insert("private", MsFlags::MS_PRIVATE);
 		m.insert("rslave", MsFlags::MS_SLAVE | MsFlags::MS_REC);
@@ -44,7 +45,7 @@ lazy_static! {
 	};
 
 	static ref ALLOWED_DEVICES: Vec<Device> = {
-		m = Vec::new();
+		let mut m = Vec::new();
 		m.push(Device {
 			r#type: 'c',
 			major: WILDCARD,
@@ -153,3 +154,4 @@ lazy_static! {
 		m
 	};
 }
+*/

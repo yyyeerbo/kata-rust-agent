@@ -1,4 +1,5 @@
-use libcontainer::configs::Config;
+use crate::configs::Config;
+use std::io::Result;
 
 pub trait Validator {
 	fn validate(&self, config: &Config) -> Result<()> {

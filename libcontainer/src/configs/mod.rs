@@ -7,13 +7,16 @@ use oci::State as OCIState;
 
 use std::time::Duration;
 use std::fmt;
-use std::path::Pathbuf;
+use std::path::PathBuf;
+use crate::errors::*;
+use std::collections::HashMap;
 
 use nix::unistd;
 
 
 use self::device::{Device, WeightDevice, ThrottleDevice};
-use libcontainer::specconv:{CreateOpts};
+use crate::specconv::{CreateOpts};
+use self::namespaces::Namespaces;
 
 pub mod validator;
 pub mod device;
@@ -66,7 +69,7 @@ pub struct Arg {
 	op: Operator,
 }
 
-#[derive(Serialzie, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Syscall {
 #[serde(default, skip_serializing_if = "String::is_empty")]
 	name: String,
@@ -77,7 +80,7 @@ pub struct Syscall {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Config {
+pub struct Config<'a> {
 #[serde(default)]
 	no_pivot_root: bool,
 #[serde(default)]
@@ -105,7 +108,7 @@ pub struct Config {
 #[serde(default)]
 	routes: Vec<Route>,
 #[serde(default)]
-	cgroups: Option<Cgroup>,
+	cgroups: Option<Cgroup<'a>>,
 #[serde(default, skip_serializing_if = "String::is_empty")]
 	apparmor_profile: String,
 #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -143,12 +146,13 @@ pub struct Config {
 	rootless_cgroups: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Hooks {
 	prestart: Vec<Box<Hook>>,
 	poststart: Vec<Box<Hook>>,
 	poststop: Vec<Box<Hook>>,
 }
-
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Capabilities {
 	bounding: Vec<String>,
 	effective: Vec<String>,
@@ -162,7 +166,7 @@ pub trait Hook {
 }
 
 pub struct FuncHook {
-	run fn(&OCIState) -> Result<()>,
+	// run: fn(&OCIState) -> Result<()>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -209,7 +213,7 @@ pub struct Mount {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct HugepageLimit {
-#[serde(dfault)]
+#[serde(default)]
 	page_size: String,
 #[serde(default)]
 	limit: u64,
@@ -223,7 +227,7 @@ pub struct IntelRdt {
 	mem_bw_schema: String,
 }
 
-type FreezerState = String;
+pub type FreezerState = String;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Cgroup<'a> {
@@ -236,12 +240,12 @@ pub struct Cgroup<'a> {
 #[serde(default)]
 	scope_prefix: String,
 	paths: HashMap<String, String>,
-	resource: &'a Resources,
+	resource: &'a Resources<'a>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Resources<'a> {
-#[serde(deffault)]
+#[serde(default)]
 	allow_all_devices: bool,
 #[serde(default, skip_serializing_if = "Vec::is_empty")]
 	allowed_devices: Vec<&'a Device>,
@@ -358,13 +362,14 @@ impl IfPrioMap {
 	}
 }
 
+/*
 impl Config {
 	fn new(opts: &CreateOpts) -> Result<Self> {
 		if opts.spec.is_none() {
-			return Err(ErrorKind::ErrorCode("invalid createopts!".into());
+			return Err(ErrorKind::ErrorCode("invalid createopts!".into()));
 		}
 
-		let root = unistd::getwd().chain_err(|| "cannot getwd")?;
+		let root = unistd::getcwd().chain_err(|| "cannot getwd")?;
 		let root = root.as_path().canonicalize().chain_err(|| 
 		"cannot resolve root into absolute path")?;
 		let mut root = root.into();
@@ -372,7 +377,7 @@ impl Config {
 
 		let spec = opts.spec.as_ref().unwrap();
 		if spec.root.is_none() {
-			return Err(ErrorKibnd::ErrorCode("no root".into()));
+			return Err(ErrorKind::ErrorCode("no root".into()));
 		}
 
 		let rootfs = PathBuf::from(&spec.root.as_ref().unwrap().path);
@@ -384,7 +389,7 @@ impl Config {
 		let mut label = spec.annotations
 				.iter()
 				.map(|(key, value)| format!("{}={}", key, value)).collect();
-		label.push(format!("bundle={}", cwd);
+		label.push(format!("bundle={}", cwd));
 
 		let mut config = Config {
 			rootfs: root,
@@ -394,7 +399,7 @@ impl Config {
 			labels: label,
 			no_new_keyring: opts.no_new_keyring,
 			rootless_euid: opts.rootless_euid,
-			rootless_cgroups, opts.rootless_cgroups,
+			rootless_cgroups: opts.rootless_cgroups,
 		};
 
 		config.mounts = Vec::new();
@@ -465,7 +470,7 @@ impl Config {
 			if process.capabilities.as_ref().is_some() {
 				let cap = process.capabilities.as_ref().unwrap();
 				config.capabilities = Some(Capabilities {
-					..cap,
+					..cap
 				})
 			}
 		}
@@ -480,3 +485,4 @@ impl Mount {
 	fn new(cwd: &str, m: &oci::Mount) -> Result<Self> {
 	}
 }
+*/

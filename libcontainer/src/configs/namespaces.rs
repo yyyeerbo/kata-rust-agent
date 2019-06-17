@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use lazy_static;
 
 
-type NameSpaceType = String;
-type Namespaces = Vec<Namespace>;
+pub type NamespaceType = String;
+pub type Namespaces = Vec<Namespace>;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Namespace {
@@ -19,13 +19,13 @@ pub struct Namespace {
 	path: String,
 }
 
-const NEWNET: &'static str = "NEWNET";
-const NEWPID: &'static str = "NEWPID";
-const NEWNS: &'static str = "NEWNS";
-const NEWUTS: &'static str = "NEWUTS";
-const NEWUSER: &'static str = "NEWUSER";
-const NEWCGROUP: &'static str = "NEWCGROUP";
-const NEWIPC: &'static str = "NEWIPC";
+pub const NEWNET: &'static str = "NEWNET";
+pub const NEWPID: &'static str = "NEWPID";
+pub const NEWNS: &'static str = "NEWNS";
+pub const NEWUTS: &'static str = "NEWUTS";
+pub const NEWUSER: &'static str = "NEWUSER";
+pub const NEWCGROUP: &'static str = "NEWCGROUP";
+pub const NEWIPC: &'static str = "NEWIPC";
 
 lazy_static! {
 	static ref TYPETONAME: HashMap<&'static str, &'static str> = {
