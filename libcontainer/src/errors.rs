@@ -11,6 +11,7 @@ error_chain! {
 		Ffi(std::ffi::NulError);
 		Caps(caps::errors::Error);
 		Serde(serde_json::Error);
+		UTF8(std::string::FromUtf8Error);
 	}
 	// define new errors
 	errors {

@@ -3,7 +3,7 @@ use serde;
 use serde_derive;
 use serde_json;
 
-use oci::State as OCIState;
+use protocols::oci::State as OCIState;
 
 use std::time::Duration;
 use std::fmt;

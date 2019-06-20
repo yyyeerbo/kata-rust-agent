@@ -4,7 +4,7 @@ extern crate serde;
 extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
-extern crate oci;
+extern crate protocols;
 extern crate caps;
 #[macro_use]
 extern crate scopeguard;
@@ -12,6 +12,9 @@ extern crate prctl;
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
+extern crate protobuf;
+#[macro_use]
+extern crate log;
 
 
 pub mod errors;

@@ -1,4 +1,4 @@
-use oci::{self, Spec};
+use protocols::oci::{self, Spec};
 use lazy_static;
 use nix::mount::MsFlags;
 // use crate::configs::namespaces;

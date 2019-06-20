@@ -7,7 +7,7 @@ use serde_json;
 use lazy_static;
 #[macro_use]
 use error_chain;
-use oci::{self, Spec, Linux, LinuxNamespace};
+use protocols::oci::{self, Spec, Linux, LinuxNamespace};
 use std::time::SystemTime;
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc::channel;
@@ -19,11 +19,14 @@ use std::ffi::CString;
 use crate::sync::Cond;
 use std::fs::File;
 use std::process::{Command};
-use oci::{LinuxDevice, LinuxIDMapping};
+use protocols::oci::{LinuxDevice, LinuxIDMapping};
 use std::os::unix::raw::pid_t;
 use std::os::unix::io::FromRawFd;
 use std::fmt::Display;
 use std::clone::Clone;
+use std::io::Read;
+
+use serde_json::error::{Category};
 
 // use crate::configs::namespaces::{NamespaceType};
 use crate::process::{self, Process};
@@ -47,6 +50,7 @@ use nix::sys::uio::IoVec;
 use nix::sys::signal::{self, Signal};
 use nix::sys::wait;
 use libc;
+use protobuf::{UnknownFields, CachedSize};
 
 use std::io::{Error as IOError};
 use std::collections::HashMap;
@@ -70,6 +74,9 @@ impl Status {
 }
 */
 
+pub struct OCIState {
+}
+
 lazy_static!{
 	static ref NAMESPACES: HashMap<&'static str, CloneFlags> = {
 		let mut m = HashMap::new();
@@ -86,58 +93,70 @@ lazy_static!{
 	pub static ref DEFAULT_DEVICES: Vec<LinuxDevice> = {
         let mut v = Vec::new();
         v.push(LinuxDevice {
-            path: "/dev/null".to_string(),
-            r#type: "c".to_string(),
-            major: 1,
-            minor: 3,
-            file_mode: Some(0o066),
-            uid: None,
-            gid: None,
+            Path: "/dev/null".to_string(),
+            Type: "c".to_string(),
+            Major: 1,
+            Minor: 3,
+            FileMode: 0o066,
+            UID: 0xffffffff,
+            GID: 0xffffffff,
+			unknown_fields: UnknownFields::default(),
+			cached_size: CachedSize::default(),
         });
         v.push(LinuxDevice {
-            path: "/dev/zero".to_string(),
-            r#type: "c".to_string(),
-            major: 1,
-            minor: 5,
-            file_mode: Some(0o066),
-            uid: None,
-            gid: None,
+            Path: "/dev/zero".to_string(),
+            Type: "c".to_string(),
+            Major: 1,
+            Minor: 5,
+            FileMode: 0o066,
+            UID: 0xffffffff,
+            GID: 0xffffffff,
+			unknown_fields: UnknownFields::default(),
+			cached_size: CachedSize::default(),
         });
         v.push(LinuxDevice {
-            path: "/dev/full".to_string(),
-            r#type: String::from("c"),
-            major: 1,
-            minor: 7,
-            file_mode: Some(0o066),
-            uid: None,
-            gid: None,
+            Path: "/dev/full".to_string(),
+            Type: String::from("c"),
+            Major: 1,
+            Minor: 7,
+            FileMode: 0o066,
+            UID: 0xffffffff,
+            GID: 0xffffffff,
+			unknown_fields: UnknownFields::default(),
+			cached_size: CachedSize::default(),
         });
         v.push(LinuxDevice {
-            path: "/dev/tty".to_string(),
-            r#type: "c".to_string(),
-            major: 5,
-            minor: 0,
-            file_mode: Some(0o066),
-            uid: None,
-            gid: None,
+            Path: "/dev/tty".to_string(),
+            Type: "c".to_string(),
+            Major: 5,
+            Minor: 0,
+            FileMode: 0o066,
+            UID: 0xffffffff,
+            GID: 0xffffffff,
+			unknown_fields: UnknownFields::default(),
+			cached_size: CachedSize::default(),
         });
         v.push(LinuxDevice {
-            path: "/dev/urandom".to_string(),
-            r#type: "c".to_string(),
-            major: 1,
-            minor: 9,
-            file_mode: Some(0o066),
-            uid: None,
-            gid: None,
+            Path: "/dev/urandom".to_string(),
+            Type: "c".to_string(),
+            Major: 1,
+            Minor: 9,
+            FileMode: 0o066,
+            UID: 0xffffffff,
+            GID: 0xffffffff,
+			unknown_fields: UnknownFields::default(),
+			cached_size: CachedSize::default(),
         });
         v.push(LinuxDevice {
-            path: "/dev/random".to_string(),
-            r#type: "c".to_string(),
-            major: 1,
-            minor: 8,
-            file_mode: Some(0o066),
-            uid: None,
-            gid: None,
+            Path: "/dev/random".to_string(),
+            Type: "c".to_string(),
+            Major: 1,
+            Minor: 8,
+            FileMode: 0o066,
+            UID: 0xffffffff,
+            GID: 0xffffffff,
+			unknown_fields: UnknownFields::default(),
+			cached_size: CachedSize::default(),
         });
         v
 	};
@@ -162,7 +181,7 @@ pub trait BaseContainer {
 	fn id(&self) -> String;
 	fn status(&self) -> Result<Status>;
 	fn state(&self) -> Result<State>;
-	fn oci_state(&self) -> Result<oci::State>;
+	fn oci_state(&self) -> Result<OCIState>;
 	fn config(&self) -> Result<&Config>;
 	fn processes(&self) -> Result<Vec<i32>>;
 	fn stats(&self) -> Result<Stats>;
@@ -178,7 +197,7 @@ pub trait BaseContainer {
 // Arc<Mutex<Innercontainer>> or just Mutex<InnerContainer>?
 // Or use Mutex<xx> as a member of struct, like C?
 // a lot of String in the struct might be &str
-struct LinuxContainer<T>
+pub struct LinuxContainer<T>
 where T: CgroupManager
 {
 	pub id: String,
@@ -240,7 +259,7 @@ where T: CgroupManager
 		Err(ErrorKind::ErrorCode(String::from("not suppoerted")).into())
 	}
 
-	fn oci_state(&self) -> Result<oci::State> {
+	fn oci_state(&self) -> Result<OCIState> {
 		Err(ErrorKind::ErrorCode("not supported".to_string()).into())
 	}
 
@@ -262,7 +281,8 @@ where T: CgroupManager
 	}
 
 	fn start(&mut self, mut p: Process) -> Result<()> {
-		let fifo_file = format!("{}/{}", self.root, EXEC_FIFO_FILENAME);
+		let fifo_file = format!("{}/{}", &self.root, EXEC_FIFO_FILENAME);
+		info!("enter contianer.start!");
 		let mut fifofd: RawFd = -1;
 		if p.init {
 			if let Ok(_) = stat::stat(fifo_file.as_str()) {
@@ -275,6 +295,7 @@ where T: CgroupManager
 				OFlag::O_PATH | OFlag::O_CLOEXEC,
 				Mode::from_bits(0).unwrap())?;
 		}
+		info!("exec fifo opened!");
 
 		lazy_static::initialize(&NAMESPACES);
 		lazy_static::initialize(&DEFAULT_DEVICES);
@@ -284,30 +305,31 @@ where T: CgroupManager
 		}
 
 		let spec = self.config.spec.as_ref().unwrap();
-		if spec.linux.is_none() {
+		if spec.Linux.is_none() {
 			return Err(ErrorKind::ErrorCode("no linux config".to_string()).into());
 		}
 
-		let linux = spec.linux.as_ref().unwrap();
+		let linux = spec.Linux.as_ref().unwrap();
 		// get namespace vector to join/new
 		let nses = get_namespaces(&linux, p.init, self.init_process_pid)?;
+		info!("got namespaces!\n");
 		let mut to_new = CloneFlags::empty();
 		let mut to_join = Vec::new();
 		let mut pidns = false;
 		let mut userns = false;
 		for ns in &nses {
-			let s = NAMESPACES.get(&ns.r#type.as_str());
+			let s = NAMESPACES.get(&ns.Type.as_str());
 			if s.is_none() {
 				return Err(ErrorKind::ErrorCode("invalid ns type".to_string()).into());
 			}
 			let s = s.unwrap();
 
-			if ns.path.is_empty() {
+			if ns.Path.is_empty() {
 				to_new.set(*s, true);
 			} else {
-				let fd = fcntl::open(ns.path.as_str(), OFlag::empty(),
+				let fd = fcntl::open(ns.Path.as_str(), OFlag::empty(),
 									Mode::empty())
-						.chain_err(|| format!("fail to open ns {}", &ns.r#type))?;
+						.chain_err(|| format!("fail to open ns {}", &ns.Type))?;
 				to_join.push((*s, fd));
 			}
 
@@ -320,8 +342,25 @@ where T: CgroupManager
 			userns = true;
 		}
 
-		let (child, mut cfile) = join_namespaces(&spec, to_new, &to_join,
-							pidns, userns, p.init)?;
+		let mut parent: u32 = 0;
+
+		let (child, cfd) = match join_namespaces(&spec,
+			to_new, &to_join, pidns, userns, p.init, &mut parent) {
+			Ok((u, v)) => (u, v),
+			Err(e) => {
+				if parent == 0 {
+					info!("parent process error out!");
+					return Err(e);
+				} else if parent == 1 {
+					info!("child process 1 error out!");
+					std::process::exit(-1);
+				} else {
+					info!("child process 2 error out!");
+					std::process::exit(-2);
+				}
+			}
+		};
+		info!("entered namespaces!");
 		if child != Pid::from_raw(-1) {
 			// parent
 			p.pid = child.as_raw();
@@ -339,22 +378,24 @@ where T: CgroupManager
 		// setup stdio in child process
 		// need fd to send master fd to parent... store the fd in
 		// process struct?
-		setup_stdio(&p)?;
+		// setup_stdio(&p)?;
 
 		if !p.cwd.is_empty() {
+			info!("cwd: {}", p.cwd.as_str());
 			unistd::chdir(p.cwd.as_str())?;
 		}
 
 		// notify parent to run poststart hooks
 		// cfd is closed when return from join_namespaces
 		// should retunr cfile instead of cfd?
-		serde_json::to_writer(&mut cfile, &SyncPC { pid: 0 })?;
+		write_json(cfd, &SyncPC { pid: 0 })?;
 
 		// new and the stat parent process
 		// For init process, we need to setup a lot of things 
 		// For exec process, only need to join existing namespaces,
 		// the namespaces are got from init process or from
 		// saved spec.
+		info!("before setup execfifo!");
 		if p.init {
 			let fd = fcntl::open(
 				format!("/proc/self/fd/{}", fifofd).as_str(),
@@ -412,6 +453,7 @@ where T: CgroupManager
 				Mode::from_bits_truncate(0))?;
 		let data: &[u8] = &[0];
 		unistd::write(fd, &data)?;
+		info!("container {} stared", &self.id);
 		self.init_process_start_time = SystemTime::now()
 			.duration_since(SystemTime::UNIX_EPOCH).unwrap()
 			.as_secs();
@@ -433,7 +475,20 @@ fn do_exec(path: &str, args: &[String], env: &[String]) -> Result<()> {
         .map(|s| CString::new(s.to_string()).unwrap_or_default())
         .collect();
     // execvp doesn't use env for the search path, so we set env manually
-    unistd::execve(&p, &a, &env).chain_err(|| "failed to exec")?;
+	info!("exec process right now!");
+    if let Err(e) = unistd::execve(&p, &a, &env) {
+		info!("execve failed!!!");
+		info!("binary: {:?}, args: {:?}, envs: {:?}", p, a, env);
+		match e {
+			nix::Error::Sys(errno) => {
+				info!("{}", errno.desc());
+			}
+			Error::InvalidPath => { info!("invalid path"); }
+			Error::InvalidUtf8 => { info!("invalid utf8"); }
+			Error::UnsupportedOperation => { info!("unsupported operation"); }
+		}
+		std::process::exit(-2);
+	}
     // should never reach here
     Ok(())
 }
@@ -442,67 +497,126 @@ fn get_namespaces(linux: &Linux, init: bool, init_pid: pid_t) -> Result<Vec<Linu
 {
 	let mut ns: Vec<LinuxNamespace> = Vec::new();
 	if init {
-		for i in &linux.namespaces {
-			ns.push(LinuxNamespace { r#type: i.r#type.clone(),
-						path: i.path.clone() });
+		for i in &linux.Namespaces {
+			ns.push(LinuxNamespace { Type: i.Type.clone(),
+						Path: i.Path.clone(),
+						unknown_fields: UnknownFields::default(),
+						cached_size: CachedSize::default(),
+						});
 		}
 	} else {
 		for i in NAMESPACES.keys() {
-			ns.push(LinuxNamespace { r#type: i.to_string(),
-				path: format!("/proc/{}/ns/{}", init_pid, i) });
+			ns.push(LinuxNamespace { Type: i.to_string(),
+				Path: format!("/proc/{}/ns/{}", init_pid, i),
+				unknown_fields: UnknownFields::default(),
+				cached_size: CachedSize::default(),
+				});
 		}
 	}
 	Ok(ns)
 }
 
-fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool) -> Result<(Pid, File)>
+const BUFLEN: usize = 40;
+
+fn read_json(fd: RawFd) -> Result<String>
+{
+	let mut json: Vec<u8> = vec![0; BUFLEN];
+
+	info!("read from {}", fd);
+
+	let n = unistd::read(fd, json.as_mut_slice())?;
+
+	info!("vector length: {}", json.len());
+	json.resize(n, 0);
+
+	Ok(String::from_utf8(json)?)
+}
+
+fn write_json(fd: RawFd, msg: &SyncPC) -> Result<()>
+{
+	let buf = serde_json::to_string(&msg).unwrap();
+
+	info!("write to {}", fd);
+	let n = unistd::write(fd, buf.as_bytes())?;
+
+	if n == 0 {
+		info!("write out 0 byte!");
+	}
+
+	Ok(())
+}
+
+fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool, parent: &mut u32) -> Result<(Pid, RawFd)>
 {
 	let ccond = Cond::new().chain_err(|| "create cond failed")?;
 	let pcond = Cond::new().chain_err(|| "create cond failed")?;
 	let (pfd, cfd) = unistd::pipe2(OFlag::O_CLOEXEC).chain_err(
 				|| "failed to create pipe")?;
 
-	let linux = spec.linux.as_ref().unwrap();
+	let linux = spec.Linux.as_ref().unwrap();
 	
 	match unistd::fork()? {
 		ForkResult::Parent {child} => {
-			let mut pfile = unsafe { File::from_raw_fd(pfd) };
-			unistd::close(cfd)?;
+			// let mut pfile = unsafe { File::from_raw_fd(pfd) };
+			//unistd::close(cfd)?;
 			ccond.wait()?;
 
 			if userns {
 				// setup uid/gid mappings
-				write_mappings(&format!("/proc/{}/uid_map", child.as_raw()), &linux.uid_mappings)?;
-				write_mappings(&format!("/proc/{}/gid_map", child.as_raw()), &linux.gid_mappings)?;
+				write_mappings(&format!("/proc/{}/uid_map", child.as_raw()), &linux.UIDMappings)?;
+				write_mappings(&format!("/proc/{}/gid_map", child.as_raw()), &linux.GIDMappings)?;
 			}
 
 			// apply cgroups
 			pcond.notify()?;
 
 			let mut pid = child.as_raw();
+			info!("wait for final child!");
 			if pidns {
-				let msg: SyncPC = serde_json::from_reader(&mut pfile)?;
+				let json = read_json(pfd)?;
+				// pfile.read_to_string(&mut json)?;
+				info!("got json: {}", json);
+				let msg: SyncPC = serde_json::from_str(json.as_str())?;
+				/*
+				let msg: SyncPC = match serde_json::from_reader(&mut pfile) {
+					Ok(u) => u,
+					Err(e) => {
+						match e.classify() {
+							Category::Io => info!("Io error!"),
+							Category::Syntax => info!("syntax error!"),
+							Category::Data => info!("data error!"),
+							Category::Eof => info!("end of file!"),
+						}
+
+						return Err(ErrorKind::Serde(e).into());
+					}
+				};
+				*/
 				pid = msg.pid;
 				// notify child continue
-				serde_json::to_writer(&mut pfile, &SyncPC { pid: 0 })?;
+				info!("got final child pid!");
+				// write_json(pfd, &SyncPC { pid: 0 })?;
+				info!("resume child!");
 				// wait for child to exit
 				let _ = wait::waitpid(Some(child), None)?;
 			}
 			// read out child pid here. we don't use
 			// cgroup to get it
 			// and the wait for child exit to get grandchild
-
-			let _ = serde_json::from_reader(&pfile)?;
+			
+			info!("wait for hook!");
+			let _ = read_json(pfd)?;
 			if init {
 				// run prestart hook
-				let _ = serde_json::from_reader(&pfile)?;
+				let _ = read_json(pfd)?;
 				//run poststart hook
 			}
 
-			return Ok((Pid::from_raw(pid), pfile));
+			return Ok((Pid::from_raw(pid), cfd));
 		}
 		ForkResult::Child => {
-			unistd::close(pfd)?;
+			*parent = 1;
+			// unistd::close(pfd)?;
 			// set oom_score_adj
 			// set rlimit
 			if userns {
@@ -519,7 +633,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 	}
 
 	// child process continues
-	let mut cfile = unsafe { File::from_raw_fd(cfd) };
+	// let mut cfile = unsafe { File::from_raw_fd(cfd) };
 	let mut mount_fd = -1;
 	let mut bind_device = false;
 	for &(s, fd) in to_join {
@@ -547,32 +661,39 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 		match unistd::fork()? {
 			ForkResult::Parent { child } => {
 				// set child pid to topmost parent and the exit
-				serde_json::to_writer(&mut cfile, &SyncPC { pid: child.as_raw() })?;
+				write_json(cfd, &SyncPC {
+					pid: child.as_raw() })?;
+
+				info!("json: {}", serde_json::to_string(&SyncPC {
+					pid: child.as_raw() }).unwrap());
 				// wait for parent read it and the continue
-				let _ = serde_json::from_reader(&cfile)?;
+				info!("after send out child pid!");
+				// let _ = read_json(cfd)?;
 				std::process::exit(0);
 			}
 			ForkResult::Child => {
+				*parent = 2;
 			}
 		}
 	}
 
 	if to_new.contains(CloneFlags::CLONE_NEWUTS) {
-		unistd::sethostname(&spec.hostname)?;
+		// unistd::sethostname(&spec.Hostname)?;
 	}
 
-	let rootfs = spec.root.as_ref().unwrap().path.as_str();
+	let rootfs = spec.Root.as_ref().unwrap().Path.as_str();
 	let root = fs::canonicalize(rootfs)?;
 	let rootfs = root.to_str().unwrap();
 
 	if to_new.contains(CloneFlags::CLONE_NEWNS) {
 		// setup rootfs
+		info!("setup rootfs!");
 		mount::init_rootfs(&spec, bind_device)?;
 	}
 
 	// notify parent to run prestart hooks
 	if init {
-		serde_json::to_writer(&mut cfile, &SyncPC { pid: 0 })?;
+		write_json(cfd, &SyncPC { pid: 0 })?;
 	}
 
 	if mount_fd != -1 {
@@ -582,15 +703,27 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 
 	if to_new.contains(CloneFlags::CLONE_NEWNS) {
 		// pivot root
-		mount::pivot_rootfs(rootfs)?;
+		// mount::pivot_rootfs(rootfs)?;
+		unistd::chroot(rootfs)?;
+		unistd::chdir("/")?;
+		if let Err(_) = stat::stat("marker") {
+			info!("not in expect root!!");
+		}
+		info!("in expect rootfs!");
+
+		if let Err(_) = stat::stat("/bin/sh") {
+			info!("no '/bin/sh'???");
+		}
 	}
 
 	// notify parent to continue before block on exec fifo
 
+	info!("rootfs: {}", &rootfs);
+
 	// block on exec fifo
 	
 
-	Ok((Pid::from_raw(-1), cfile))
+	Ok((Pid::from_raw(-1), cfd))
 }
 
 fn setup_stdio(p: &Process) -> Result<()> {
@@ -644,7 +777,7 @@ fn setup_stdio(p: &Process) -> Result<()> {
 fn write_mappings(path: &str, maps: &[LinuxIDMapping]) -> Result<()> {
     let mut data = String::new();
     for m in maps {
-        let val = format!("{} {} {}\n", m.container_id, m.host_id, m.size);
+        let val = format!("{} {} {}\n", m.ContainerID, m.HostID, m.Size);
         data = data + &val;
     }
     if !data.is_empty() {
@@ -680,12 +813,14 @@ fn setid(uid: Uid, gid: Gid) -> Result<()> {
 impl<U> LinuxContainer<U>
 where U: CgroupManager
 {
-	fn new<T: Into<String> + Display + Clone>(id: T, base: T, config: Config) -> Result<Self> {
-		let root = format!("{}/{}", base.into(), id.clone().into());
+	pub fn new<T: Into<String> + Display + Clone>(id: T, base: T, config: Config) -> Result<Self> {
+		let base = base.into();
+		let id = id.into();
+		let root = format!("{}/{}", base.as_str(), id.as_str());
 
 		if let Err(e) = fs::create_dir_all(root.as_str()) {
 			if e.kind() == std::io::ErrorKind::AlreadyExists {
-				return Err(e).chain_err(|| format!("container {} already exists", id));
+				return Err(e).chain_err(|| format!("container {} already exists", id.as_str()));
 			}
 
 			return Err(e).chain_err(|| format!("fail to create container directory {}", root));
@@ -696,7 +831,7 @@ where U: CgroupManager
 		.chain_err(|| format!("cannot change onwer of container {} root", id))?;
 
 		Ok(LinuxContainer {
-			id: id.into(),
+			id: id,
 			root,
 			cgroup_manager: None,
 			status: Some("stopped".to_string()),

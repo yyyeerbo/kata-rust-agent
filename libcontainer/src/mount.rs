@@ -1,6 +1,6 @@
 use std::fs::{self, OpenOptions};
 use std::path::{self, Path, PathBuf};
-use oci::{self, Spec, LinuxDevice, Mount};
+use protocols::oci::{self, Spec, LinuxDevice, Mount};
 use std::os::unix;
 use std::collections::HashMap;
 use nix::unistd::{self, Uid, Gid};
@@ -8,6 +8,7 @@ use nix::mount::{self, MsFlags, MntFlags};
 use nix::sys::stat::{self, Mode, SFlag};
 use nix::fcntl::{self, OFlag};
 use nix::NixPath;
+use libc::uid_t;
 
 use lazy_static;
 use crate::container::DEFAULT_DEVICES;
@@ -80,14 +81,14 @@ pub fn init_rootfs(spec: &Spec, bind_device: bool) -> Result<()> {
 	lazy_static::initialize(&PROPAGATION);
 	lazy_static::initialize(&LINUXDEVICETYPE);
 
-	let linux = spec.linux.as_ref().unwrap();
+	let linux = spec.Linux.as_ref().unwrap();
 	let mut flags = MsFlags::MS_REC;
-	match PROPAGATION.get(&linux.rootfs_propagation.as_str()) {
+	match PROPAGATION.get(&linux.RootfsPropagation.as_str()) {
 		Some(fl) => flags |= *fl,
 		None => flags |= MsFlags::MS_SLAVE,
 	}
 
-	let rootfs = spec.root.as_ref().unwrap().path.as_str();
+	let rootfs = spec.Root.as_ref().unwrap().Path.as_str();
 	let root = fs::canonicalize(rootfs)?;
 	let rootfs = root.to_str().unwrap();
 
@@ -95,9 +96,9 @@ pub fn init_rootfs(spec: &Spec, bind_device: bool) -> Result<()> {
 	mount::mount(Some(rootfs), rootfs, None::<&str>,
 				MsFlags::MS_BIND | MsFlags::MS_REC, None::<&str>)?;
 	
-	for m in &spec.mounts {
+	for m in &spec.Mounts {
 		let (mut flags, data) = parse_mount(&m);
-		if m.r#type == "cgroup" {
+		if m.field_type == "cgroup" {
 			continue;
 		}
 
@@ -112,7 +113,7 @@ pub fn init_rootfs(spec: &Spec, bind_device: bool) -> Result<()> {
 	unistd::chdir(rootfs)?;
 
 	default_symlinks()?;
-	create_devices(&linux.devices, bind_device)?;
+	create_devices(&linux.Devices, bind_device)?;
 	ensure_ptmx()?;
 
 	unistd::chdir(&olddir)?;
@@ -162,7 +163,7 @@ fn mount_from(m: &Mount, rootfs: &str,
 	let d = String::from(data);
 	let dest = format!("{}/{}", rootfs, &m.destination);
 
-    let src = if m.r#type == "bind" {
+    let src = if m.field_type == "bind" {
         let src = fs::canonicalize(m.source.as_str())?;
         let dir = if src.is_file() {
             Path::new(&dest).parent().unwrap()
@@ -182,7 +183,7 @@ fn mount_from(m: &Mount, rootfs: &str,
         PathBuf::from(&m.source)
     };
 
-	mount::mount(Some(src.to_str().unwrap()), dest.as_str(), Some(m.r#type.as_str()), flags, Some(d.as_str()))?;
+	mount::mount(Some(src.to_str().unwrap()), dest.as_str(), Some(m.field_type.as_str()), flags, Some(d.as_str()))?;
 
     if flags.contains(MsFlags::MS_BIND)
         && flags.intersects(
@@ -229,8 +230,8 @@ fn create_devices(devices: &[LinuxDevice], bind: bool) -> Result<()> {
         op(dev)?;
     }
     for dev in devices {
-        if !dev.path.starts_with("/dev") || dev.path.contains("..") {
-            let msg = format!("{} is not a valid device path", dev.path);
+        if !dev.Path.starts_with("/dev") || dev.Path.contains("..") {
+            let msg = format!("{} is not a valid device path", dev.Path);
             bail!(ErrorKind::ErrorCode(msg));
         }
         op(dev)?;
@@ -263,22 +264,22 @@ lazy_static!{
 }
 
 fn mknod_dev(dev: &LinuxDevice) -> Result<()> {
-    let f = match LINUXDEVICETYPE.get(dev.r#type.as_str()) {
+    let f = match LINUXDEVICETYPE.get(dev.Type.as_str()) {
 		Some(v) => v,
 		None => return Err(ErrorKind::ErrorCode("invalid spec".to_string()).into()),
 	};
 
     stat::mknod(
-        &dev.path[1..],
+        &dev.Path[1..],
         *f,
-        Mode::from_bits_truncate(dev.file_mode.unwrap_or(0)),
-        makedev(dev.major as u64 , dev.minor as u64),
+        Mode::from_bits_truncate(dev.FileMode),
+        makedev(dev.Major as u64 , dev.Minor as u64),
     )?;
 
     unistd::chown(
-        &dev.path[1..],
-        dev.uid.map(|n| Uid::from_raw(n)),
-        dev.gid.map(|n| Gid::from_raw(n)),
+        &dev.Path[1..],
+        Some(Uid::from_raw(dev.UID as uid_t)),
+        Some(Gid::from_raw(dev.GID as uid_t)),
     )?;
 
     Ok(())
@@ -286,7 +287,7 @@ fn mknod_dev(dev: &LinuxDevice) -> Result<()> {
 
 fn bind_dev(dev: &LinuxDevice) -> Result<()> {
     let fd = fcntl::open(
-        &dev.path[1..],
+        &dev.Path[1..],
         OFlag::O_RDWR | OFlag::O_CREAT,
         Mode::from_bits_truncate(0o644),
     )?;
@@ -294,8 +295,8 @@ fn bind_dev(dev: &LinuxDevice) -> Result<()> {
     unistd::close(fd)?;
 
     mount::mount(
-        Some(&*dev.path),
-        &dev.path[1..],
+        Some(&*dev.Path),
+        &dev.Path[1..],
         None::<&str>,
         MsFlags::MS_BIND,
         None::<&str>,

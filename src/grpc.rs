@@ -1,6 +1,18 @@
 use std::sync::Arc;
 use grpcio::{ServerBuilder, EnvBuilder, Server};
 use futures::*;
+use grpcio::{RpcStatus, RpcStatusCode};
+
+use libcontainer::container::{LinuxContainer, BaseContainer};
+use libcontainer::process::{Process};
+use libcontainer::specconv::{CreateOpts};
+use libcontainer::cgroups::fs::Manager as FsManager;
+use protocols::empty::Empty;
+use std::sync::Mutex;
+use std::collections::HashMap;
+use lazy_static;
+
+use std::fs;
 
 #[derive(Clone)]
 #[derive(Default)]
@@ -8,9 +20,126 @@ struct agentService {
     test: u32,
 }
 
+lazy_static! {
+	static ref CTRS: Mutex<HashMap<String, LinuxContainer<FsManager>>> = {
+		let mut m = HashMap::new();
+		Mutex::new(m)
+	};
+}
+
 impl protocols::agent_grpc::AgentService for agentService {
-    fn create_container(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::CreateContainerRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
-    fn start_container(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::StartContainerRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
+    fn create_container(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::CreateContainerRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {
+		let cid = req.container_id.clone();
+		let eid = req.exec_id.clone();
+		let oci = req.OCI.as_ref().unwrap();
+
+		info!("receive createcontainer {}\n", &cid);
+
+		let _ = fs::remove_dir_all("/run/agent");
+
+		lazy_static::initialize(&CTRS);
+
+		let opts = CreateOpts {
+			cgroup_name: "".to_string(),
+			use_systemd_cgroup: false,
+			no_pivot_root: false,
+			no_new_keyring: false,
+			spec: Some(oci.clone()),
+			rootless_euid: false,
+			rootless_cgroup: false,
+		};
+
+		let _ = fs::create_dir_all("/run/agent");
+
+		let mut ctr = match LinuxContainer::new(cid.as_str(), "/run/agent", opts) {
+			Ok(v) => v,
+			Err(_) => { 
+				info!("create contianer failed!\n");
+				let f = sink.fail(RpcStatus::new(
+				RpcStatusCode::Internal, 
+				Some(format!("fail to create container {}", cid))))
+			.map_err(move |e| error!("fail to reply {:?}", req));
+			ctx.spawn(f);
+			return;
+			}
+		};
+
+		let p = if oci.Process.is_some() {
+			let tp = match Process::new(oci.get_Process(), eid.as_str(), true) {
+				Ok(v) => v,
+				Err(_) => {
+					info!("fail to create process!\n");
+					let f = sink.fail(RpcStatus::new(
+						RpcStatusCode::Internal,
+						Some("fail to create process".to_string())))
+						.map_err(|e| error!("process create fail"));
+					ctx.spawn(f);
+					return;
+				}
+			};
+			tp
+		} else {
+			info!("no process configurations!\n");
+			let f = sink.fail(RpcStatus::new(
+				RpcStatusCode::Internal,
+				Some("fail to create process".to_string())))
+				.map_err(|e| error!("process create fail"));
+				ctx.spawn(f);
+				return;
+		};
+
+		if let Err(_) = ctr.start(p) {
+			info!("fail to start process!\n");
+			let f = sink.fail(RpcStatus::new(
+				RpcStatusCode::Internal,
+				Some(format!("fail to start init process {}", eid))))
+				.map_err(move |e| error!("fail to start {}", eid));
+				ctx.spawn(f);
+				return;
+		}
+
+		unsafe {
+			let mut m = CTRS.lock().unwrap();
+			m.insert(String::from(cid.clone()), ctr);
+		}
+
+		info!("created container!\n");
+
+		let resp = Empty::new();
+		let f = sink.success(resp)
+				.map_err(move |e| error!("fail to create container {}", cid));
+				ctx.spawn(f);
+	}
+
+    fn start_container(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::StartContainerRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {
+		let cid = req.container_id.clone();
+
+		let mut m = CTRS.lock().unwrap();
+		let mut ctr = unsafe {
+			let cr = m.get_mut(&cid);
+			let c = if cr.is_some() {
+				cr.unwrap()
+			} else {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::Internal,
+					Some("fail to find container".to_string())))
+					.map_err(move |e| error!("get container fail {}", cid.clone()));
+					ctx.spawn(f);
+					return;
+			};
+			c
+		};
+
+		let _ = ctr.exec();
+
+		info!("exec process!\n");
+
+		let resp = Empty::new();
+		let f = sink.success(resp)
+				.map_err(move |e| error!("fail to create container {}", cid));
+				ctx.spawn(f);
+	}
+
     fn remove_container(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::RemoveContainerRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
     fn exec_process(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::ExecProcessRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
     fn signal_process(&mut self, ctx: ::grpcio::RpcContext, req: protocols::agent::SignalProcessRequest, sink: ::grpcio::UnarySink<protocols::empty::Empty>) {}
