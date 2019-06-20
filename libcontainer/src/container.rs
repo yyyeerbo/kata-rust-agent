@@ -464,19 +464,35 @@ where T: CgroupManager
 	}
 }
 
+use std::env;
+
 fn do_exec(path: &str, args: &[String], env: &[String]) -> Result<()> {
     let p = CString::new(path.to_string()).unwrap();
     let a: Vec<CString> = args
         .iter()
         .map(|s| CString::new(s.to_string()).unwrap_or_default())
         .collect();
+	
+	for (key, _) in env::vars() {
+		env::remove_var(key);
+	}
+
+	for e in env.iter() {
+		let v: Vec<&str> = e.split("=").collect();
+		if v.len() != 2 {
+			info!("incorrect env config!");
+		}
+		env::set_var(v[0], v[1]);
+	}
+/*
     let env: Vec<CString> = env
         .iter()
         .map(|s| CString::new(s.to_string()).unwrap_or_default())
         .collect();
+		*/
     // execvp doesn't use env for the search path, so we set env manually
 	info!("exec process right now!");
-    if let Err(e) = unistd::execve(&p, &a, &env) {
+    if let Err(e) = unistd::execvp(&p, &a) {
 		info!("execve failed!!!");
 		info!("binary: {:?}, args: {:?}, envs: {:?}", p, a, env);
 		match e {
@@ -678,7 +694,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 	}
 
 	if to_new.contains(CloneFlags::CLONE_NEWUTS) {
-		// unistd::sethostname(&spec.Hostname)?;
+		unistd::sethostname(&spec.Hostname)?;
 	}
 
 	let rootfs = spec.Root.as_ref().unwrap().Path.as_str();
@@ -703,8 +719,8 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 
 	if to_new.contains(CloneFlags::CLONE_NEWNS) {
 		// pivot root
-		// mount::pivot_rootfs(rootfs)?;
-		unistd::chroot(rootfs)?;
+		mount::pivot_rootfs(rootfs)?;
+		// unistd::chroot(rootfs)?;
 		unistd::chdir("/")?;
 		if let Err(_) = stat::stat("marker") {
 			info!("not in expect root!!");

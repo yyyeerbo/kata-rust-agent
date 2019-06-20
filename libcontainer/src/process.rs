@@ -17,6 +17,8 @@ use nix::Result;
 use nix::sys::socket::{self, AddressFamily, SockType, SockProtocol, SockFlag};
 
 use protocols::oci::Process as OCIProcess;
+use nix::Error;
+use nix::errno::Errno;
 
 pub struct Process {
 	pub exec_id: String,
@@ -98,17 +100,29 @@ impl Process {
 		};
 
 		info!("before create console socket!\n");
-		/*
+
 		if ocip.Terminal {
-			let (psocket, csocket) = socket::socketpair(
+			let (psocket, csocket) = match socket::socketpair(
 					AddressFamily::Unix,
 					SockType::Stream,
-					Some(SockProtocol::Tcp),
-					SockFlag::SOCK_CLOEXEC)?;
+					None,
+					SockFlag::SOCK_CLOEXEC) {
+				Ok((u, v)) => (u, v),
+				Err(e) => {
+					match e {
+						Error::Sys(errno) => {
+							info!("socketpair: {}", errno.desc());
+						}
+						_ => {
+							info!("socketpair: other error!");
+						}
+					}
+					return Err(e);
+				}
+			};
 			p.parent_console_socket = Some(psocket);
 			p.console_socket = Some(csocket);
 		}
-		*/
 
 		info!("created console socket!\n");
 
