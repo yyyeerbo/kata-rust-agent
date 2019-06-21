@@ -197,6 +197,7 @@ pub trait BaseContainer {
 // Arc<Mutex<Innercontainer>> or just Mutex<InnerContainer>?
 // Or use Mutex<xx> as a member of struct, like C?
 // a lot of String in the struct might be &str
+#[derive(Debug)]
 pub struct LinuxContainer<T>
 where T: CgroupManager
 {

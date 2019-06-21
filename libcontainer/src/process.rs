@@ -20,6 +20,7 @@ use protocols::oci::Process as OCIProcess;
 use nix::Error;
 use nix::errno::Errno;
 
+#[derive(Debug)]
 pub struct Process {
 	pub exec_id: String,
 	pub args: Vec<String>,
