@@ -15,5 +15,5 @@ simple-logging = "2.0.2"
 grpcio = { path = "grpc-rs" }
 protobuf = "2.6.1"
 futures = "0.1.27"
-libc = "0.2.21"
-nix = "0.11.0"
+libc = "0.2.58"
+nix = "0.14.1"

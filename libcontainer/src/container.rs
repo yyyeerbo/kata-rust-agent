@@ -38,7 +38,7 @@ use crate::stats::Stats;
 use crate::mount;
 
 use nix::sys::stat::{self, Mode};
-use nix::sys::socket::{self, AddressFamily, SockType, SockProtocol, SockFlag, ControlMessage, MsgFlags};
+use nix::sys::socket::{self, AddressFamily, SockType, SockProtocol, SockFlag, ControlMessage, MsgFlags, ControlMessageOwned, CmsgBuffer};
 use nix::fcntl;
 use nix::fcntl::{OFlag};
 use nix::Error;
@@ -184,6 +184,7 @@ pub trait BaseContainer {
 	fn oci_state(&self) -> Result<OCIState>;
 	fn config(&self) -> Result<&Config>;
 	fn processes(&self) -> Result<Vec<i32>>;
+	fn get_process(&self, eid: &str) -> Result<&Process>;
 	fn stats(&self) -> Result<Stats>;
 	fn set(&mut self, config: Config) -> Result<()>;
 	fn start(&mut self, mut p: Process) -> Result<()>;
@@ -270,6 +271,16 @@ where T: CgroupManager
 
 	fn processes(&self) -> Result<Vec<i32>> {
 		Ok(self.processes.keys().cloned().collect())
+	}
+
+	fn get_process(&self, eid: &str) -> Result<&Process> {
+		for (_, v) in &self.processes {
+			if eid == v.exec_id.as_str() {
+				return Ok(v);
+			}
+		}
+
+		Err(ErrorKind::ErrorCode(format!("invalid eid {}", eid)).into())
 	}
 
 	fn stats(&self) -> Result<Stats> {
@@ -369,10 +380,56 @@ where T: CgroupManager
 			if p.init {
 				self.init_process_pid = p.pid;
 			}
-			self.processes.insert(p.pid, p);
 			self.created = SystemTime::now();
+			// defer!({ self.processes.insert(p.pid, p); () });
 			// parent process need to receive ptmx masterfd
 			// and set it up in process struct
+
+			let console_fd = if p.parent_console_socket.is_some() {
+				p.parent_console_socket.unwrap()
+			} else {
+				self.processes.insert(p.pid, p);
+				return Ok(());
+			};
+
+			let mut v: Vec<u8> = vec![0; 40];
+			let iov = IoVec::from_mut_slice(v.as_mut_slice());
+			let mut c: Vec<u8> = vec![0; 40];
+
+			match socket::recvmsg(console_fd,
+						&[iov], Some(&mut c), MsgFlags::empty()) {
+				Ok(rmsg) => {
+					let cmsg: Vec<ControlMessageOwned> = rmsg.cmsgs().collect();
+					// expect the vector lenght 1
+					if cmsg.len() != 1 {
+						return Err(ErrorKind::ErrorCode(
+						"error in semd/recvmsg!".to_string())
+						.into());
+					}
+
+					match &cmsg[0] {
+						ControlMessageOwned::ScmRights(v) => {
+							if v.len() != 1 {
+								return Err(ErrorKind::ErrorCode(
+									"error in send/recvmsg!"
+									.to_string()).into());
+							}
+
+							p.term_master = Some(v[0]);
+						}
+						// all other cases are error
+						_ => {
+							return Err(ErrorKind::ErrorCode(
+								"error in send/recvmsg!"
+								.to_string()).into());
+						}
+					}
+				}
+				Err(e) => return Err(ErrorKind::Nix(e).into()),
+			}
+
+			self.processes.insert(p.pid, p);
+
 			return Ok(());
 		}
 

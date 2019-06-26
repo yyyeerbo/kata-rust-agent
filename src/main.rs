@@ -21,6 +21,7 @@ mod mount;
 mod namespace;
 mod network;
 mod sandbox;
+mod version;
 
 use namespace::Namespace;
 use network::Network;

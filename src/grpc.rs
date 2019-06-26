@@ -9,14 +9,32 @@ use libcontainer::container::{BaseContainer, LinuxContainer};
 use libcontainer::cgroups::Manager as CgroupManager;
 use libcontainer::process::Process;
 use libcontainer::specconv::CreateOpts;
+use libcontainer::errors::*;
 use protocols::empty::Empty;
+use protocols::agent::{WriteStreamResponse, ReadStreamResponse, GuestDetailsResponse, AgentDetails, WaitProcessResponse};
+use protocols::health::{HealthCheckResponse_ServingStatus, HealthCheckResponse};
+use protobuf::{RepeatedField, SingularPtrField};
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::mount::add_storages;
+use nix::unistd::{self, Pid};
+use nix::sys::stat;
+use nix::errno::Errno;
+use nix::sys::signal::Signal;
+use nix::sys::wait::WaitStatus;
+use libcontainer::process::ProcessOperations;
+
+use crate::mount::{add_storages, STORAGEHANDLERLIST};
 use crate::sandbox::Sandbox;
+use crate::version::{AGENT_VERSION, API_VERSION};
 
 use std::fs;
+use libc::pid_t;
+
+const SYSFS_MEMORY_BLOCK_SIZE_PATH: &'static str = "/sys/devices/system/memory/block_size_bytes";
+const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memory/probe";
+
 
 #[derive(Clone, Default)]
 struct agentService {
@@ -177,6 +195,55 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ExecProcessRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+		let cid = req.container_id.clone();
+		let exec_id = req.exec_id.clone();
+
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		// ignore string_user, not sure what it is
+		let ocip = if req.process.is_some() {
+			req.process.as_ref().unwrap()
+		} else {
+			let f = sink.fail(RpcStatus::new(
+			RpcStatusCode::InvalidArgument,
+			Some(String::from("No process configuration!"))))
+			.map_err(|e| error!("Invalid execprocessrequest!"));
+			ctx.spawn(f);
+			return;
+		};
+
+		let p = match Process::new(ocip, exec_id.as_str(), false) {
+			Ok(v) => v,
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::Internal,
+					Some(String::from("fail while creating process!"))))
+				.map_err(|e| error!("fail to create process!"));
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		let mut ctr = match sandbox.get_container(cid.as_str()) {
+			Some(v) => v,
+			None => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::Internal,
+					Some(String::from("no container"))))
+				.map_err(move |e| error!("no container {}", cid.clone()));
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		let _ = ctr.run(p);
+
+		let resp = Empty::new();
+		let f = sink.success(resp)
+				.map_err(move |e| error!("connot exec process {}",
+					exec_id.clone()));
+		ctx.spawn(f);
     }
     fn signal_process(
         &mut self,
@@ -184,6 +251,30 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::SignalProcessRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+		let cid = req.container_id.clone();
+		let eid = req.container_id.clone();
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		let p = match find_process(&mut sandbox, cid.as_str(),
+				eid.as_str(), true) {
+			Ok(v) => v,
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::InvalidArgument,
+					Some(String::from("invalid argument"))))
+				.map_err(|_e| error!("invalid argument"));
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		let _ = p.signal(Signal::from_c_int(req.signal as i32).unwrap());
+
+		let resp = Empty::new();
+		let f = sink.success(resp)
+			.map_err(|_e| error!("cannot signal process"));
+		ctx.spawn(f);
     }
     fn wait_process(
         &mut self,
@@ -191,6 +282,62 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::WaitProcessRequest,
         sink: ::grpcio::UnarySink<protocols::agent::WaitProcessResponse>,
     ) {
+		let cid = req.container_id.clone();
+		let eid = req.exec_id.clone();
+		let s = Arc::clone(&self.sandbox);
+		let mut resp = WaitProcessResponse::new();
+		let mut pid: pid_t = -1;
+
+		{
+		let mut sandbox = s.lock().unwrap();
+
+		let p = match find_process(&mut sandbox, cid.as_str(),
+				eid.as_str(), false) {
+			Ok(v) => v,
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::InvalidArgument,
+					Some(String::from("invalid argument"))))
+				.map_err(|_e| error!("invalid argument"));
+				ctx.spawn(f);
+				return;
+			}
+		};
+		pid = p.pid;
+
+		match p.wait() {
+			Ok(st) => {
+				match st {
+					WaitStatus::Exited(_, c) => resp.status = c,
+					_ => {
+						let f = sink.fail(RpcStatus::new(
+						RpcStatusCode::InvalidArgument,
+						Some(String::from("wait error"))))
+						.map_err(|_e| error!("wait error"));
+						ctx.spawn(f);
+						return;
+					}
+				}
+			}
+			
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::InvalidArgument,
+					Some(String::from("wait error"))))
+				.map_err(|_e| error!("wait error"));
+				ctx.spawn(f);
+				return;
+			}
+		}
+		}
+
+		let mut sandbox = s.lock().unwrap();
+		let mut ctr = sandbox.get_container(cid.as_str()).unwrap();
+		ctr.processes.remove(&pid);
+
+		let f = sink.success(resp)
+			.map_err(|_e| error!("cannot wait process"));
+		ctx.spawn(f);
     }
     fn list_processes(
         &mut self,
@@ -233,6 +380,76 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::WriteStreamRequest,
         sink: ::grpcio::UnarySink<protocols::agent::WriteStreamResponse>,
     ) {
+		let cid = req.container_id.clone();
+		let eid = req.exec_id.clone();
+
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+		let ctr = match sandbox.get_container(cid.as_str()) {
+			Some(v) => v,
+			None => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::InvalidArgument,
+					Some(String::from("invalid cid"))))
+				.map_err(move |e| error!("invalid cid {}", cid.clone()));
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		let p = match ctr.get_process(eid.as_str()) {
+			Ok(v) => v,
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::InvalidArgument,
+					Some(format!("invalid eid {}", eid.as_str()))))
+				.map_err(move |e| error!("invalid eid {}", eid.clone()));
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		// use ptmx io
+		let fd = if p.term_master.is_some() {
+			p.term_master.unwrap()
+		} else {
+			// use piped io
+			p.parent_stdin.unwrap()
+		};
+
+		let mut l = req.data.len();
+		match unistd::write(fd, req.data.as_slice()) {
+			Ok(v) => {
+				if v < l {
+					/*
+					let f = sink.fail(RpcStatus::new(
+						RpcStatusCode::InvalidArgument,
+						Some(format!("write error"))))
+					.map_err(|_e| error!("write error"));
+					ctx.spawn(f);
+					return;
+					*/
+					info!("write {} bytes", v);
+					l = v;
+				}
+			}
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::InvalidArgument,
+					Some(format!("write error"))))
+				.map_err(|_e| error!("write error"));
+				ctx.spawn(f);
+				return;
+			}
+		}
+		
+		let mut resp = WriteStreamResponse::new();
+		resp.set_len(l as u32);
+
+		let f = sink.success(resp)
+			.map_err(|e| error!("writestream request failed!"));
+
+		ctx.spawn(f);
     }
     fn read_stdout(
         &mut self,
@@ -240,6 +457,56 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ReadStreamRequest,
         sink: ::grpcio::UnarySink<protocols::agent::ReadStreamResponse>,
     ) {
+		let cid = req.container_id.clone();
+		let eid = req.exec_id.clone();
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		let p = match find_process(&mut sandbox,
+						cid.as_str(), eid.as_str(), false) {
+			Ok(v) => v,
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::InvalidArgument,
+					Some(String::from("Invalid arguments!"))))
+				.map_err(move |_e| error!("wrong argument cid {} eid {}", cid.clone(), eid.clone()));
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		let fd = if p.term_master.is_some() {
+			p.term_master.unwrap()
+		} else {
+			p.parent_stdout.unwrap()
+		};
+
+		let l = req.len;
+		let mut v: Vec<u8> = Vec::with_capacity(l as usize);
+		unsafe { v.set_len(l as usize ); }
+
+		match unistd::read(fd, v.as_mut_slice()) {
+			Ok(len) => {
+				v.resize(len, 0);
+			}
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::Internal,
+					Some(String::from("read error!"))))
+				.map_err(move |_e| error!("read error for container {} process {}", cid.clone(), eid.clone()));
+
+				ctx.spawn(f);
+				return;
+			}
+		}
+
+		let mut resp = ReadStreamResponse::new();
+		resp.set_data(v);
+
+		let f = sink.success(resp)
+			.map_err(move |_e| error!("read error for container {} process {}", cid.clone(), eid.clone()));
+
+		ctx.spawn(f);
     }
     fn read_stderr(
         &mut self,
@@ -247,6 +514,34 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ReadStreamRequest,
         sink: ::grpcio::UnarySink<protocols::agent::ReadStreamResponse>,
     ) {
+		let cid = req.container_id.clone();
+		let eid = req.exec_id.clone();
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		let vector = match read_stream(&mut sandbox, cid.as_str(),
+			eid.as_str(), req.len as usize, false) {
+			Ok(v) => v,
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::Internal,
+					Some(String::from("read stream error!"))))
+				.map_err(move |_e| error!(
+				"read stream fail for container {} process {}",
+				cid.clone(), eid.clone()));
+
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		let mut resp = ReadStreamResponse::new();
+		resp.set_data(vector);
+
+		let f = sink.success(resp)
+			.map_err(move |_e| error!("read error for container {} process {}", cid.clone(), eid.clone()));
+
+		ctx.spawn(f);
     }
     fn close_stdin(
         &mut self,
@@ -398,6 +693,32 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::GuestDetailsRequest,
         sink: ::grpcio::UnarySink<protocols::agent::GuestDetailsResponse>,
     ) {
+		let mut resp = GuestDetailsResponse::new();
+		// to get memory block size
+		match get_memory_info(req.mem_block_size,
+				req.mem_hotplug_probe) {
+			Ok((u, v)) => {
+				resp.mem_block_size_bytes = u;
+				resp.support_mem_hotplug_probe = v;
+			}
+
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::Internal,
+					Some(String::from("internal error"))))
+				.map_err(|_e| error!("cannot get memory info!"));
+				ctx.spawn(f);
+				return;
+			}
+		}
+
+		// to get agent details
+		let detail = get_agent_details();
+		resp.agent_details = SingularPtrField::some(detail);
+
+		let f = sink.success(resp)
+			.map_err(|_e| error!("cannot get guest detail"));
+		ctx.spawn(f);
     }
     fn mem_hotplug_by_probe(
         &mut self,
@@ -431,6 +752,14 @@ impl protocols::health_grpc::Health for healthService {
         req: protocols::health::CheckRequest,
         sink: ::grpcio::UnarySink<protocols::health::HealthCheckResponse>,
     ) {
+		let mut resp = HealthCheckResponse::new();
+		resp.set_status(HealthCheckResponse_ServingStatus::SERVING);
+
+		let f = sink.success(resp)
+			.map_err(|_e| error!(
+			"cannot get health status"));
+
+		ctx.spawn(f);
     }
     fn version(
         &mut self,
@@ -440,13 +769,131 @@ impl protocols::health_grpc::Health for healthService {
     ) {
         info!("version {:?}", req);
         let mut rep = protocols::health::VersionCheckResponse::new();
-        rep.agent_version = "a1".to_string();
-        rep.grpc_version = "g2".to_string();
+        rep.agent_version = AGENT_VERSION.to_string();
+        rep.grpc_version = API_VERSION.to_string();
         let f = sink
             .success(rep)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
+}
+
+fn get_memory_info(block_size: bool, hotplug: bool) -> Result<(u64, bool)> {
+	let mut size: u64 = 0;
+	let mut plug: bool = false;
+	if block_size {
+		match fs::read_to_string(SYSFS_MEMORY_BLOCK_SIZE_PATH) {
+			Ok(v) => {
+				if v.len() == 0 {
+					return Err(ErrorKind::ErrorCode(
+						"Invalid block size".to_string()).into());
+				}
+
+				size = v.parse::<u64>()?;
+			}
+			Err(e) => {
+				if e.kind() != std::io::ErrorKind::NotFound {
+					return Err(ErrorKind::Io(e).into());
+				}
+			}
+		}
+	}
+
+	if hotplug {
+		match stat::stat(SYSFS_MEMORY_HOTPLUG_PROBE_PATH) {
+			Ok(_) => plug = true,
+			Err(e) => {
+				match e {
+					nix::Error::Sys(errno) => {
+						match errno {
+							Errno::ENOENT => plug = false,
+							_ => return Err(ErrorKind::Nix(e).into()),
+						}
+					}
+					_ => return Err(ErrorKind::Nix(e).into()),
+				}
+			}
+		}
+	}
+
+	Ok((size, plug))
+}
+
+fn get_agent_details() -> AgentDetails {
+	let mut detail = AgentDetails::new();
+
+	detail.set_version(AGENT_VERSION.to_string());
+	detail.set_supports_seccomp(false);
+	detail.init_daemon = {
+		unistd::getpid() == Pid::from_raw(1)
+	};
+
+	detail.device_handlers = RepeatedField::new();
+	detail.storage_handlers = RepeatedField::from_vec(
+							STORAGEHANDLERLIST
+							.keys()
+							.cloned()
+							.map(|x| x.into())
+							.collect());
+	
+	detail
+}
+
+fn read_stream(sandbox: &mut Sandbox, cid: &str, eid: &str, l: usize, stdout: bool) -> Result<Vec<u8>> {
+	let p = match find_process(sandbox, cid, eid, false) {
+		Ok(v) => v,
+		Err(_) => return Err(ErrorKind::ErrorCode(
+		"Invalid Argument!".to_string()).into()),
+	};
+
+	let fd = if p.term_master.is_some() {
+		p.term_master.unwrap()
+	} else {
+		if stdout {
+			p.parent_stdout.unwrap()
+		} else {
+			p.parent_stderr.unwrap()
+		}
+	};
+
+	let mut v: Vec<u8> = Vec::with_capacity(l);
+	unsafe { v.set_len(l); }
+
+	match unistd::read(fd, v.as_mut_slice()) {
+		Ok(len) => {
+			v.resize(len, 0);
+		}
+		Err(_) => return Err(ErrorKind::ErrorCode(
+			"read error".to_string()).into()),
+	}
+
+	Ok(v)
+}
+
+fn find_process<'a>(sandbox: &'a mut Sandbox, cid: &'a str, eid: &'a str, init: bool) -> Result<&'a Process> {
+	let ctr = match sandbox.get_container(cid) {
+		Some(v) => v,
+		None => return Err(ErrorKind::ErrorCode(
+			String::from("Invalid container id")).into()),
+	};
+
+	if init && eid == "" {
+		let p = match ctr.processes.get(&ctr.init_process_pid) {
+			Some(v) => v,
+			None =>  return Err(ErrorKind::ErrorCode(
+				String::from("cannot find init process!")).into()),
+		};
+
+		return Ok(p);
+	}
+
+	let p = match ctr.get_process(eid) {
+		Ok(v) => v,
+		Err(_) => return Err(ErrorKind::ErrorCode(
+			"Invalid exec id".to_string()).into()),
+	};
+
+	Ok(p)
 }
 
 pub fn start<S: Into<String>>(sandbox: Sandbox, host: S, port: u16) -> Server {

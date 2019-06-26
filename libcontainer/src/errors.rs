@@ -12,6 +12,7 @@ error_chain! {
 		Caps(caps::errors::Error);
 		Serde(serde_json::Error);
 		UTF8(std::string::FromUtf8Error);
+		Parse(std::num::ParseIntError);
 	}
 	// define new errors
 	errors {
