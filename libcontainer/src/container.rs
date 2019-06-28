@@ -39,8 +39,7 @@ use crate::mount;
 
 use nix::sys::stat::{self, Mode};
 use nix::sys::socket::{self, AddressFamily, SockType, SockProtocol, SockFlag, ControlMessage, MsgFlags, ControlMessageOwned, CmsgBuffer};
-use nix::fcntl;
-use nix::fcntl::{OFlag};
+use nix::fcntl::{self, OFlag, FcntlArg};
 use nix::Error;
 use nix::errno::Errno;
 use nix::sched::{self, CloneFlags};
@@ -49,7 +48,9 @@ use nix::pty;
 use nix::sys::uio::IoVec;
 use nix::sys::signal::{self, Signal};
 use nix::sys::wait;
-use libc;
+use nix::sys::termios::{self, SetArg, LocalFlags};
+
+use libc::{self, VMIN, VTIME};
 use protobuf::{UnknownFields, CachedSize};
 
 use std::io::{Error as IOError};
@@ -87,6 +88,19 @@ lazy_static!{
 		m.insert("mount", CloneFlags::CLONE_NEWNS);
 		m.insert("uts", CloneFlags::CLONE_NEWUTS);
 		m.insert("cgroup", CloneFlags::CLONE_NEWCGROUP);
+		m
+	};
+
+// type to name hashmap, better to be in NAMESPACES
+	static ref TYPETONAME: HashMap<&'static str, &'static str> = {
+		let mut m = HashMap::new();
+		m.insert("ipc", "ipc");
+		m.insert("user", "user");
+		m.insert("pid", "pid");
+		m.insert("network", "net");
+		m.insert("mount", "mnt");
+		m.insert("cgroup", "cgroup");
+		m.insert("uts", "uts");
 		m
 	};
 
@@ -184,7 +198,7 @@ pub trait BaseContainer {
 	fn oci_state(&self) -> Result<OCIState>;
 	fn config(&self) -> Result<&Config>;
 	fn processes(&self) -> Result<Vec<i32>>;
-	fn get_process(&self, eid: &str) -> Result<&Process>;
+	fn get_process(&mut self, eid: &str) -> Result<&mut Process>;
 	fn stats(&self) -> Result<Stats>;
 	fn set(&mut self, config: Config) -> Result<()>;
 	fn start(&mut self, mut p: Process) -> Result<()>;
@@ -273,8 +287,8 @@ where T: CgroupManager
 		Ok(self.processes.keys().cloned().collect())
 	}
 
-	fn get_process(&self, eid: &str) -> Result<&Process> {
-		for (_, v) in &self.processes {
+	fn get_process(&mut self, eid: &str) -> Result<&mut Process> {
+		for (_, v) in self.processes.iter_mut() {
 			if eid == v.exec_id.as_str() {
 				return Ok(v);
 			}
@@ -306,6 +320,7 @@ where T: CgroupManager
 			fifofd = fcntl::open(fifo_file.as_str(),
 				OFlag::O_PATH | OFlag::O_CLOEXEC,
 				Mode::from_bits(0).unwrap())?;
+
 		}
 		info!("exec fifo opened!");
 
@@ -339,9 +354,20 @@ where T: CgroupManager
 			if ns.Path.is_empty() {
 				to_new.set(*s, true);
 			} else {
-				let fd = fcntl::open(ns.Path.as_str(), OFlag::empty(),
-									Mode::empty())
-						.chain_err(|| format!("fail to open ns {}", &ns.Type))?;
+				let fd = match fcntl::open(ns.Path.as_str(),
+								OFlag::empty(), Mode::empty()) {
+					Ok(v) => v,
+					Err(e) => {
+						info!("cannot open type: {} path: {}",
+							ns.Type.clone(), ns.Path.clone());
+						info!("error is : {}", e
+									.as_errno()
+									.unwrap()
+									.desc());
+						return Err(e.into());
+					}
+				};
+				//		.chain_err(|| format!("fail to open ns {}", &ns.Type))?;
 				to_join.push((*s, fd));
 			}
 
@@ -379,11 +405,27 @@ where T: CgroupManager
 			self.status = Some("created".to_string());
 			if p.init {
 				self.init_process_pid = p.pid;
+				unistd::close(fifofd)?;
 			}
 			self.created = SystemTime::now();
 			// defer!({ self.processes.insert(p.pid, p); () });
 			// parent process need to receive ptmx masterfd
 			// and set it up in process struct
+
+			fcntl::fcntl(p.parent_stdin.unwrap(),
+					FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
+			fcntl::fcntl(p.parent_stdout.unwrap(),
+					FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
+			fcntl::fcntl(p.parent_stderr.unwrap(),
+					FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
+
+			unistd::close(p.stdin.unwrap())?;
+			unistd::close(p.stderr.unwrap())?;
+			unistd::close(p.stdout.unwrap())?;
+
+			for &(_, fd) in &to_join {
+				let _ = unistd::close(fd);
+			}
 
 			let console_fd = if p.parent_console_socket.is_some() {
 				p.parent_console_socket.unwrap()
@@ -428,6 +470,16 @@ where T: CgroupManager
 				Err(e) => return Err(ErrorKind::Nix(e).into()),
 			}
 
+			fcntl::fcntl(p.term_master.unwrap(),
+					FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
+			unistd::close(p.parent_console_socket.unwrap())?;
+			unistd::close(p.console_socket.unwrap())?;
+
+			// turn off echo
+			// let mut term = termios::tcgetattr(p.term_master.unwrap())?;
+			// term.local_flags &= !(LocalFlags::ECHO | LocalFlags::ICANON);
+			// termios::tcsetattr(p.term_master.unwrap(), SetArg::TCSANOW, &term)?;
+
 			self.processes.insert(p.pid, p);
 
 			return Ok(());
@@ -436,7 +488,7 @@ where T: CgroupManager
 		// setup stdio in child process
 		// need fd to send master fd to parent... store the fd in
 		// process struct?
-		// setup_stdio(&p)?;
+		setup_stdio(&p)?;
 
 		if !p.cwd.is_empty() {
 			info!("cwd: {}", p.cwd.as_str());
@@ -517,6 +569,7 @@ where T: CgroupManager
 			.as_secs();
 
 		self.status = Some("running".to_string());
+		unistd::close(fd)?;
 
 		Ok(())
 	}
@@ -581,7 +634,8 @@ fn get_namespaces(linux: &Linux, init: bool, init_pid: pid_t) -> Result<Vec<Linu
 	} else {
 		for i in NAMESPACES.keys() {
 			ns.push(LinuxNamespace { Type: i.to_string(),
-				Path: format!("/proc/{}/ns/{}", init_pid, i),
+				Path: format!("/proc/{}/ns/{}",
+					init_pid, TYPETONAME.get(i).unwrap()),
 				unknown_fields: UnknownFields::default(),
 				cached_size: CachedSize::default(),
 				});
@@ -600,7 +654,7 @@ fn read_json(fd: RawFd) -> Result<String>
 
 	let n = unistd::read(fd, json.as_mut_slice())?;
 
-	info!("vector length: {}", json.len());
+	info!("vector length: {}, read {}", json.len(), n);
 	json.resize(n, 0);
 
 	Ok(String::from_utf8(json)?)
@@ -632,7 +686,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 	match unistd::fork()? {
 		ForkResult::Parent {child} => {
 			// let mut pfile = unsafe { File::from_raw_fd(pfd) };
-			//unistd::close(cfd)?;
+			unistd::close(cfd)?;
 			ccond.wait()?;
 
 			if userns {
@@ -685,12 +739,13 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				let _ = read_json(pfd)?;
 				//run poststart hook
 			}
+			unistd::close(pfd)?;
 
 			return Ok((Pid::from_raw(pid), cfd));
 		}
 		ForkResult::Child => {
 			*parent = 1;
-			// unistd::close(pfd)?;
+			unistd::close(pfd)?;
 			// set oom_score_adj
 			// set rlimit
 			if userns {
@@ -716,7 +771,25 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			continue;
 		}
 
-		sched::setns(fd, s)?;
+		// just skip user namespace for now
+		// we cannot join user namespace in multithreaded
+		// program, which is us(kata-agent using grpc)
+		// To fix this
+		// 1. write kata-agent as singlethread program
+		// 2. use a binary to exec OR self exec to enter
+		//    namespaces before multithreaded, the way
+		//    libcontainer works
+
+		if s == CloneFlags::CLONE_NEWUSER {
+			unistd::close(fd)?;
+			continue;
+		}
+
+		if let Err(e) = sched::setns(fd, s) {
+			info!("setns error: {}", e.as_errno().unwrap().desc());
+			info!("setns: ns type: {:?}", s);
+			return Err(e.into());
+		}
 		unistd::close(fd)?;
 
 		if s == CloneFlags::CLONE_NEWUSER {
@@ -725,6 +798,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 		}
 	}
 
+	info!("to_new: {:?}", to_new);
 	sched::unshare(to_new & !CloneFlags::CLONE_NEWUSER)?;
 
 	if userns {
@@ -803,7 +877,14 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 fn setup_stdio(p: &Process) -> Result<()> {
 	if p.console_socket.is_some() {
 		// we can setup ptmx master for process
-		let pseduo = pty::openpty(None, None)?;
+		// turn off echo
+		let mut term = termios::tcgetattr(0)?;
+		termios::cfmakeraw(&mut term);
+		// term.local_flags &= !(LocalFlags::ECHO | LocalFlags::ICANON);
+		// term.control_chars[VMIN] = 1;
+		// term.control_chars[VTIME] = 0;
+
+		let pseduo = pty::openpty(None, Some(&term))?;
 		defer!(unistd::close(pseduo.master).unwrap());
 		let data: &[u8] = b"/dev/ptmx";
 		let iov = [IoVec::from_slice(&data)];
@@ -816,6 +897,7 @@ fn setup_stdio(p: &Process) -> Result<()> {
 				None)?;
 
 		unistd::close(console_fd)?;
+		unistd::close(p.parent_console_socket.unwrap())?;
 		console_fd = pseduo.slave;
 
 		unistd::setsid()?;
@@ -824,6 +906,11 @@ fn setup_stdio(p: &Process) -> Result<()> {
 		unistd::dup2(console_fd, 1)?;
 		unistd::dup2(console_fd, 2)?;
 
+		// turn off echo
+		// let mut term = termios::tcgetattr(0)?;
+		// term.local_flags &= !(LocalFlags::ECHO | LocalFlags::ICANON);
+		// termios::tcsetattr(0, SetArg::TCSANOW, &term)?;
+		
 		if console_fd > 2 {
 			unistd::close(console_fd)?;
 		}
@@ -844,6 +931,11 @@ fn setup_stdio(p: &Process) -> Result<()> {
 			unistd::close(p.stderr.unwrap())?;
 		}
 	}
+
+	unistd::close(p.parent_stdin.unwrap())?;
+	unistd::close(p.parent_stdout.unwrap())?;
+	unistd::close(p.parent_stderr.unwrap())?;
+
 
 	Ok(())
 }

@@ -198,6 +198,8 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let cid = req.container_id.clone();
 		let exec_id = req.exec_id.clone();
 
+		info!("cid: {} eid: {}", cid.clone(), exec_id.clone());
+
 		let s = Arc::clone(&self.sandbox);
 		let mut sandbox = s.lock().unwrap();
 
@@ -256,6 +258,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let s = Arc::clone(&self.sandbox);
 		let mut sandbox = s.lock().unwrap();
 
+		info!("signal process: {}/{}", cid.clone(), eid.clone());
 		let p = match find_process(&mut sandbox, cid.as_str(),
 				eid.as_str(), true) {
 			Ok(v) => v,
@@ -288,6 +291,8 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let mut resp = WaitProcessResponse::new();
 		let mut pid: pid_t = -1;
 
+		info!("wait process: {}/{}", cid.clone(), eid.clone());
+
 		{
 		let mut sandbox = s.lock().unwrap();
 
@@ -309,7 +314,9 @@ impl protocols::agent_grpc::AgentService for agentService {
 			Ok(st) => {
 				match st {
 					WaitStatus::Exited(_, c) => resp.status = c,
+					WaitStatus::Signaled(_, sig, _) => resp.status = sig as i32,
 					_ => {
+						info!("wrong status");
 						let f = sink.fail(RpcStatus::new(
 						RpcStatusCode::InvalidArgument,
 						Some(String::from("wait error"))))
@@ -320,19 +327,61 @@ impl protocols::agent_grpc::AgentService for agentService {
 				}
 			}
 			
-			Err(_) => {
-				let f = sink.fail(RpcStatus::new(
-					RpcStatusCode::InvalidArgument,
-					Some(String::from("wait error"))))
-				.map_err(|_e| error!("wait error"));
-				ctx.spawn(f);
-				return;
+			Err(e) => {
+				info!("wait process failed with: {}",
+					e.as_errno().unwrap().desc());
+				match e {
+					nix::Error::Sys(Errno::ECHILD) => {
+						// this definitely not right
+						// the exit status is probably not
+						// right. we should use subreaper
+						// and thread to gather process exit 
+						// status. register as subreaper,
+						// get SIGCHILD and then wait to get
+						// the correct status
+						info!("already exited");
+						resp.status = 0;
+					}
+
+					_ => {
+						let f = sink.fail(RpcStatus::new(
+							RpcStatusCode::InvalidArgument,
+							Some(String::from("wait error"))))
+						.map_err(|_e| error!("wait error"));
+						ctx.spawn(f);
+						return;
+					}
+				}
 			}
 		}
 		}
 
 		let mut sandbox = s.lock().unwrap();
 		let mut ctr = sandbox.get_container(cid.as_str()).unwrap();
+		// need to close all fds
+		let mut p = ctr.processes.get_mut(&pid).unwrap();
+
+		if p.parent_stdin.is_some() {
+			let _ = unistd::close(p.parent_stdin.unwrap());
+		}
+
+		if p.parent_stdout.is_some() {
+			let _ = unistd::close(p.parent_stdout.unwrap());
+		}
+
+		if p.parent_stderr.is_some() {
+			let _ = unistd::close(p.parent_stderr.unwrap());
+		}
+
+		if p.term_master.is_some() {
+			let _ = unistd::close(p.term_master.unwrap());
+		}
+
+		p.parent_stdin = None;
+		p.parent_stdout = None;
+		p.parent_stderr = None;
+		p.term_master = None;
+
 		ctr.processes.remove(&pid);
 
 		let f = sink.success(resp)
@@ -382,6 +431,8 @@ impl protocols::agent_grpc::AgentService for agentService {
     ) {
 		let cid = req.container_id.clone();
 		let eid = req.exec_id.clone();
+
+		info!("write stdin for {}/{}", cid.clone(), eid.clone());
 
 		let s = Arc::clone(&self.sandbox);
 		let mut sandbox = s.lock().unwrap();
@@ -433,13 +484,18 @@ impl protocols::agent_grpc::AgentService for agentService {
 					l = v;
 				}
 			}
-			Err(_) => {
-				let f = sink.fail(RpcStatus::new(
-					RpcStatusCode::InvalidArgument,
-					Some(format!("write error"))))
-				.map_err(|_e| error!("write error"));
-				ctx.spawn(f);
-				return;
+			Err(e) => {
+				match e {
+					nix::Error::Sys(nix::errno::Errno::EAGAIN) => l = 0,
+					_ => {
+					let f = sink.fail(RpcStatus::new(
+						RpcStatusCode::InvalidArgument,
+						Some(format!("write error"))))
+					.map_err(|_e| error!("write error"));
+					ctx.spawn(f);
+					return;
+					}
+				}
 			}
 		}
 		
@@ -459,49 +515,28 @@ impl protocols::agent_grpc::AgentService for agentService {
     ) {
 		let cid = req.container_id.clone();
 		let eid = req.exec_id.clone();
+		// info!("read stdout for {}/{}", cid.clone(), eid.clone());
 		let s = Arc::clone(&self.sandbox);
 		let mut sandbox = s.lock().unwrap();
 
-		let p = match find_process(&mut sandbox,
-						cid.as_str(), eid.as_str(), false) {
+		let vector = match read_stream(&mut sandbox, cid.as_str(),
+			eid.as_str(), req.len as usize, true) {
 			Ok(v) => v,
 			Err(_) => {
 				let f = sink.fail(RpcStatus::new(
-					RpcStatusCode::InvalidArgument,
-					Some(String::from("Invalid arguments!"))))
-				.map_err(move |_e| error!("wrong argument cid {} eid {}", cid.clone(), eid.clone()));
-				ctx.spawn(f);
-				return;
-			}
-		};
-
-		let fd = if p.term_master.is_some() {
-			p.term_master.unwrap()
-		} else {
-			p.parent_stdout.unwrap()
-		};
-
-		let l = req.len;
-		let mut v: Vec<u8> = Vec::with_capacity(l as usize);
-		unsafe { v.set_len(l as usize ); }
-
-		match unistd::read(fd, v.as_mut_slice()) {
-			Ok(len) => {
-				v.resize(len, 0);
-			}
-			Err(_) => {
-				let f = sink.fail(RpcStatus::new(
 					RpcStatusCode::Internal,
-					Some(String::from("read error!"))))
-				.map_err(move |_e| error!("read error for container {} process {}", cid.clone(), eid.clone()));
+					Some(String::from("read stream error!"))))
+				.map_err(move |_e| error!(
+				"read stream fail for container {} process {}",
+				cid.clone(), eid.clone()));
 
 				ctx.spawn(f);
 				return;
 			}
-		}
+		};
 
 		let mut resp = ReadStreamResponse::new();
-		resp.set_data(v);
+		resp.set_data(vector);
 
 		let f = sink.success(resp)
 			.map_err(move |_e| error!("read error for container {} process {}", cid.clone(), eid.clone()));
@@ -516,6 +551,7 @@ impl protocols::agent_grpc::AgentService for agentService {
     ) {
 		let cid = req.container_id.clone();
 		let eid = req.exec_id.clone();
+		// info!("read stderr for {}/{}", cid.clone(), eid.clone());
 		let s = Arc::clone(&self.sandbox);
 		let mut sandbox = s.lock().unwrap();
 
@@ -549,6 +585,39 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::CloseStdinRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+		let cid = req.container_id.clone();
+		let eid = req.exec_id.clone();
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		let p = match find_process(&mut sandbox, cid.as_str(),
+				eid.as_str(), false) {
+			Ok(v) => v,
+			Err(_) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::InvalidArgument,
+					Some(String::from("invalid argument"))))
+				.map_err(|_e| error!("invalid argument"));
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		if p.term_master.is_some() {
+			let _ = unistd::close(p.term_master.unwrap());
+			p.term_master = None;
+		}
+
+		if p.parent_stdin.is_some() {
+			let _ = unistd::close(p.parent_stdin.unwrap());
+			p.parent_stdin = None;
+		}
+
+		let resp = Empty::new();
+
+		let f = sink.success(resp)
+			.map_err(|_e| error!("close stdin failed"));
+		ctx.spawn(f);
     }
     fn tty_win_resize(
         &mut self,
@@ -693,6 +762,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::GuestDetailsRequest,
         sink: ::grpcio::UnarySink<protocols::agent::GuestDetailsResponse>,
     ) {
+		info!("get guest details!");
 		let mut resp = GuestDetailsResponse::new();
 		// to get memory block size
 		match get_memory_info(req.mem_block_size,
@@ -703,6 +773,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 			}
 
 			Err(_) => {
+				info!("fail to get memory info!");
 				let f = sink.fail(RpcStatus::new(
 					RpcStatusCode::Internal,
 					Some(String::from("internal error"))))
@@ -785,13 +856,15 @@ fn get_memory_info(block_size: bool, hotplug: bool) -> Result<(u64, bool)> {
 		match fs::read_to_string(SYSFS_MEMORY_BLOCK_SIZE_PATH) {
 			Ok(v) => {
 				if v.len() == 0 {
+					info!("string in empty???");
 					return Err(ErrorKind::ErrorCode(
 						"Invalid block size".to_string()).into());
 				}
 
-				size = v.parse::<u64>()?;
+				size = v.trim().parse::<u64>()?;
 			}
 			Err(e) => {
+				info!("memory block size error: {:?}", e.kind());
 				if e.kind() != std::io::ErrorKind::NotFound {
 					return Err(ErrorKind::Io(e).into());
 				}
@@ -803,6 +876,8 @@ fn get_memory_info(block_size: bool, hotplug: bool) -> Result<(u64, bool)> {
 		match stat::stat(SYSFS_MEMORY_HOTPLUG_PROBE_PATH) {
 			Ok(_) => plug = true,
 			Err(e) => {
+				info!("hotplug memory error: {}",
+					e.as_errno().unwrap().desc());
 				match e {
 					nix::Error::Sys(errno) => {
 						match errno {
@@ -863,14 +938,25 @@ fn read_stream(sandbox: &mut Sandbox, cid: &str, eid: &str, l: usize, stdout: bo
 		Ok(len) => {
 			v.resize(len, 0);
 		}
-		Err(_) => return Err(ErrorKind::ErrorCode(
-			"read error".to_string()).into()),
+		Err(e) => {
+			match e {
+				nix::Error::Sys(errno) => {
+					match errno {
+						Errno::EAGAIN => v.resize(0, 0),
+						_ => return Err(ErrorKind::Nix(
+							nix::Error::Sys(errno)).into()),
+					}
+				}
+				_ => return Err(ErrorKind::ErrorCode(
+				"read error".to_string()).into()),
+			}
+		}
 	}
 
 	Ok(v)
 }
 
-fn find_process<'a>(sandbox: &'a mut Sandbox, cid: &'a str, eid: &'a str, init: bool) -> Result<&'a Process> {
+fn find_process<'a>(sandbox: &'a mut Sandbox, cid: &'a str, eid: &'a str, init: bool) -> Result<&'a mut Process> {
 	let ctr = match sandbox.get_container(cid) {
 		Some(v) => v,
 		None => return Err(ErrorKind::ErrorCode(
@@ -878,7 +964,7 @@ fn find_process<'a>(sandbox: &'a mut Sandbox, cid: &'a str, eid: &'a str, init: 
 	};
 
 	if init && eid == "" {
-		let p = match ctr.processes.get(&ctr.init_process_pid) {
+		let p = match ctr.processes.get_mut(&ctr.init_process_pid) {
 			Some(v) => v,
 			None =>  return Err(ErrorKind::ErrorCode(
 				String::from("cannot find init process!")).into()),

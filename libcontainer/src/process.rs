@@ -144,7 +144,7 @@ impl Process {
 			p.additional_groups = gids;
 		}
 
-		let (pstdin, stdin) = unistd::pipe()?;
+		let (stdin, pstdin) = unistd::pipe()?;
 		p.parent_stdin = Some(pstdin);
 		p.stdin = Some(stdin);
 
