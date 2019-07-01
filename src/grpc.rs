@@ -31,6 +31,7 @@ use crate::version::{AGENT_VERSION, API_VERSION};
 
 use std::fs;
 use libc::pid_t;
+use std::os::unix::io::RawFd;
 
 const SYSFS_MEMORY_BLOCK_SIZE_PATH: &'static str = "/sys/devices/system/memory/block_size_bytes";
 const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memory/probe";
@@ -97,7 +98,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         };
 
         let p = if oci.Process.is_some() {
-            let tp = match Process::new(oci.get_Process(), eid.as_str(), true) {
+            let tp = match Process::new(oci.get_Process(), eid.as_str(), Vec::new(), true) {
                 Ok(v) => v,
                 Err(_) => {
                     info!("fail to create process!\n");
@@ -203,6 +204,17 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let s = Arc::clone(&self.sandbox);
 		let mut sandbox = s.lock().unwrap();
 
+		let mut m: Vec<Option<RawFd>> = Vec::new();
+
+		for (_, c) in &sandbox.containers {
+			for (_, p) in &c.processes {
+				m.push(p.term_master.clone());
+				m.push(p.parent_stdin.clone());
+				m.push(p.parent_stdout.clone());
+				m.push(p.parent_stderr.clone());
+			}
+		}
+
 		// ignore string_user, not sure what it is
 		let ocip = if req.process.is_some() {
 			req.process.as_ref().unwrap()
@@ -215,7 +227,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 			return;
 		};
 
-		let p = match Process::new(ocip, exec_id.as_str(), false) {
+		let p = match Process::new(ocip, exec_id.as_str(), m, false) {
 			Ok(v) => v,
 			Err(_) => {
 				let f = sink.fail(RpcStatus::new(

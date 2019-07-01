@@ -500,6 +500,16 @@ where T: CgroupManager
 		// should retunr cfile instead of cfd?
 		write_json(cfd, &SyncPC { pid: 0 })?;
 
+		// close all useless fds
+
+		for fd in &p.to_close {
+			if fd.is_some() {
+				let _ = unistd::close(fd.unwrap());
+			}
+		}
+
+		p.to_close = Vec::default();
+
 		// new and the stat parent process
 		// For init process, we need to setup a lot of things 
 		// For exec process, only need to join existing namespaces,
@@ -676,10 +686,11 @@ fn write_json(fd: RawFd, msg: &SyncPC) -> Result<()>
 
 fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool, parent: &mut u32) -> Result<(Pid, RawFd)>
 {
-	let ccond = Cond::new().chain_err(|| "create cond failed")?;
-	let pcond = Cond::new().chain_err(|| "create cond failed")?;
+	// let ccond = Cond::new().chain_err(|| "create cond failed")?;
+	// let pcond = Cond::new().chain_err(|| "create cond failed")?;
 	let (pfd, cfd) = unistd::pipe2(OFlag::O_CLOEXEC).chain_err(
 				|| "failed to create pipe")?;
+	let (crfd, pwfd) = unistd::pipe2(OFlag::O_CLOEXEC)?;
 
 	let linux = spec.Linux.as_ref().unwrap();
 	
@@ -687,7 +698,8 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 		ForkResult::Parent {child} => {
 			// let mut pfile = unsafe { File::from_raw_fd(pfd) };
 			unistd::close(cfd)?;
-			ccond.wait()?;
+			unistd::close(crfd)?;
+			let _ = read_json(pfd)?;
 
 			if userns {
 				// setup uid/gid mappings
@@ -696,7 +708,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			}
 
 			// apply cgroups
-			pcond.notify()?;
+			write_json(pwfd, &SyncPC{pid: 0})?;
 
 			let mut pid = child.as_raw();
 			info!("wait for final child!");
@@ -723,7 +735,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				pid = msg.pid;
 				// notify child continue
 				info!("got final child pid!");
-				// write_json(pfd, &SyncPC { pid: 0 })?;
+				write_json(pwfd, &SyncPC { pid: 0 })?;
 				info!("resume child!");
 				// wait for child to exit
 				let _ = wait::waitpid(Some(child), None)?;
@@ -740,20 +752,22 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				//run poststart hook
 			}
 			unistd::close(pfd)?;
+			unistd::close(pwfd)?;
 
 			return Ok((Pid::from_raw(pid), cfd));
 		}
 		ForkResult::Child => {
 			*parent = 1;
 			unistd::close(pfd)?;
+			unistd::close(pwfd)?;
 			// set oom_score_adj
 			// set rlimit
 			if userns {
 				sched::unshare(CloneFlags::CLONE_NEWUSER)?;
 			}
 
-			ccond.notify()?;
-			pcond.wait()?;
+			write_json(cfd, &SyncPC{pid: 0})?;
+			let _ = read_json(crfd)?;
 
 			if userns {
 				setid(Uid::from_raw(0), Gid::from_raw(0))?;
@@ -779,16 +793,22 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 		// 2. use a binary to exec OR self exec to enter
 		//    namespaces before multithreaded, the way
 		//    libcontainer works
-
+/*
 		if s == CloneFlags::CLONE_NEWUSER {
 			unistd::close(fd)?;
 			continue;
 		}
-
+*/
 		if let Err(e) = sched::setns(fd, s) {
 			info!("setns error: {}", e.as_errno().unwrap().desc());
 			info!("setns: ns type: {:?}", s);
-			return Err(e.into());
+			if s == CloneFlags::CLONE_NEWUSER {
+				if e.as_errno().unwrap() != Errno::EINVAL {
+					return Err(e.into());
+				}
+			} else {
+				return Err(e.into());
+			}
 		}
 		unistd::close(fd)?;
 
@@ -816,7 +836,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 					pid: child.as_raw() }).unwrap());
 				// wait for parent read it and the continue
 				info!("after send out child pid!");
-				// let _ = read_json(cfd)?;
+				let _ = read_json(crfd)?;
 				std::process::exit(0);
 			}
 			ForkResult::Child => {
@@ -824,6 +844,8 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			}
 		}
 	}
+
+	unistd::close(crfd)?;
 
 	if to_new.contains(CloneFlags::CLONE_NEWUTS) {
 		unistd::sethostname(&spec.Hostname)?;
@@ -878,13 +900,13 @@ fn setup_stdio(p: &Process) -> Result<()> {
 	if p.console_socket.is_some() {
 		// we can setup ptmx master for process
 		// turn off echo
-		let mut term = termios::tcgetattr(0)?;
-		termios::cfmakeraw(&mut term);
+		// let mut term = termios::tcgetattr(0)?;
+		// termios::cfmakeraw(&mut term);
 		// term.local_flags &= !(LocalFlags::ECHO | LocalFlags::ICANON);
 		// term.control_chars[VMIN] = 1;
 		// term.control_chars[VTIME] = 0;
 
-		let pseduo = pty::openpty(None, Some(&term))?;
+		let pseduo = pty::openpty(None, None)?;
 		defer!(unistd::close(pseduo.master).unwrap());
 		let data: &[u8] = b"/dev/ptmx";
 		let iov = [IoVec::from_slice(&data)];
@@ -946,10 +968,18 @@ fn write_mappings(path: &str, maps: &[LinuxIDMapping]) -> Result<()> {
         let val = format!("{} {} {}\n", m.ContainerID, m.HostID, m.Size);
         data = data + &val;
     }
+	
+	info!("mapping: {}", data);
     if !data.is_empty() {
         let fd = fcntl::open(path, OFlag::O_WRONLY, Mode::empty())?;
         defer!(unistd::close(fd).unwrap());
-        unistd::write(fd, data.as_bytes())?;
+        match unistd::write(fd, data.as_bytes()) {
+			Ok(_) => {}
+			Err(e) => {
+				info!("cannot write mapping");
+				return Err(e.into());
+			}
+		}
     }
     Ok(())
 }
