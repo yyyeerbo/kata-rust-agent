@@ -651,6 +651,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::UpdateInterfaceRequest,
         sink: ::grpcio::UnarySink<protocols::types::Interface>,
     ) {
+        let interface = protocols::types::Interface::new();
+        let f = sink
+            .success(interface)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn update_routes(
         &mut self,
@@ -658,6 +663,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::UpdateRoutesRequest,
         sink: ::grpcio::UnarySink<protocols::agent::Routes>,
     ) {
+        let routes = protocols::agent::Routes::new();
+        let f = sink
+            .success(routes)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn list_interfaces(
         &mut self,
@@ -665,6 +675,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ListInterfacesRequest,
         sink: ::grpcio::UnarySink<protocols::agent::Interfaces>,
     ) {
+        let interface = protocols::agent::Interfaces::new();
+        let f = sink
+            .success(interface)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn list_routes(
         &mut self,
@@ -672,6 +687,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ListRoutesRequest,
         sink: ::grpcio::UnarySink<protocols::agent::Routes>,
     ) {
+        let routes = protocols::agent::Routes::new();
+        let f = sink
+            .success(routes)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn start_tracing(
         &mut self,
@@ -693,6 +713,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::StopTracingRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+        let empty = protocols::empty::Empty::new();
+        let f = sink
+            .success(empty)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn create_sandbox(
         &mut self,
@@ -753,6 +778,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::DestroySandboxRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+        let empty = protocols::empty::Empty::new();
+        let f = sink
+            .success(empty)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn online_cpu_mem(
         &mut self,
@@ -760,6 +790,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::OnlineCPUMemRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+        let empty = protocols::empty::Empty::new();
+        let f = sink
+            .success(empty)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn reseed_random_dev(
         &mut self,
@@ -767,6 +802,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ReseedRandomDevRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+        let empty = protocols::empty::Empty::new();
+        let f = sink
+            .success(empty)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn get_guest_details(
         &mut self,
@@ -809,6 +849,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::MemHotplugByProbeRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+        let empty = protocols::empty::Empty::new();
+        let f = sink
+            .success(empty)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn set_guest_date_time(
         &mut self,
@@ -816,6 +861,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::SetGuestDateTimeRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+        let empty = protocols::empty::Empty::new();
+        let f = sink
+            .success(empty)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
     fn copy_file(
         &mut self,
@@ -823,6 +873,11 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::CopyFileRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+        let empty = protocols::empty::Empty::new();
+        let f = sink
+            .success(empty)
+            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+        ctx.spawn(f)
     }
 }
 

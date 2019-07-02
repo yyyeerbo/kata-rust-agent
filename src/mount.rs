@@ -220,8 +220,28 @@ fn common_storage_handler(storage: &Storage) -> Result<String, String> {
 
 // mount_storage performs the mount described by the storage structure.
 fn mount_storage(storage: &Storage) -> Result<(), String> {
+     match storage.fstype.as_str() {
+        DRIVER9PTYPE | DRIVERVIRTIOFSTYPE => {
+            let dest_path = Path::new(storage.mount_point.as_str());
+            if ! dest_path.exists() {
+                fs::create_dir_all(dest_path).map_err(|err| format!("Create mount destination failed with {:?}", err));
+            }
+        }
+        _ => ()
+    }
+
     let options_vec = storage.options.to_vec();
     let (flags, options) = parse_mount_flags_and_options(options_vec);
+    
+     info!("mount storage as: mount-source: {},
+                mount-destination: {},
+                mount-fstype:      {},
+                mount-options:     {}", storage.source.as_str(),
+          storage.mount_point.as_str(),
+          storage.fstype.as_str(),
+          options.as_str()
+    );
+
     let bare_mount = BareMount::new(
         storage.source.as_str(),
         storage.mount_point.as_str(),
