@@ -46,6 +46,9 @@ fn main() {
 
         tx.send(())
     });
+	// receive something from destroy_sandbox here?
+	// or in the thread above? It depneds whether grpc request
+	// are run in another thread or in the main thead?
     let _ = rx.wait();
     let _ = server.shutdown().wait();
     let _ = fs::remove_file("/tmp/testagent");
