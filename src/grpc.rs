@@ -346,72 +346,36 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let eid = req.exec_id.clone();
 		let s = Arc::clone(&self.sandbox);
 		let mut resp = WaitProcessResponse::new();
-		let mut pid: pid_t = -1;
+        let mut pid: pid_t = -1;
+        let mut exit_pipe_r: RawFd = -1;
+        let mut buf: Vec<u8> = vec![0,1];
 
 		info!("wait process: {}/{}", cid.clone(), eid.clone());
 
-		{
-		let mut sandbox = s.lock().unwrap();
+        {
+            let mut sandbox = s.lock().unwrap();
 
-		let p = match find_process(&mut sandbox, cid.as_str(),
-				eid.as_str(), false) {
-			Ok(v) => v,
-			Err(_) => {
-				let f = sink.fail(RpcStatus::new(
-					RpcStatusCode::InvalidArgument,
-					Some(String::from("invalid argument"))))
-				.map_err(|_e| error!("invalid argument"));
-				ctx.spawn(f);
-				return;
-			}
-		};
-		pid = p.pid;
+            let p = match find_process(&mut sandbox, cid.as_str(),
+                                       eid.as_str(), false) {
+                Ok(v) => v,
+                Err(_) => {
+                    let f = sink.fail(RpcStatus::new(
+                        RpcStatusCode::InvalidArgument,
+                        Some(String::from("invalid argument"))))
+                        .map_err(|_e| error!("invalid argument"));
+                    ctx.spawn(f);
+                    return;
+                }
+            };
+            if p.exit_pipe_r.is_some() {
+                exit_pipe_r = p.exit_pipe_r.unwrap();
+            }
+            pid = p.pid;
+        }
 
-		match p.wait() {
-			Ok(st) => {
-				match st {
-					WaitStatus::Exited(_, c) => resp.status = c,
-					WaitStatus::Signaled(_, sig, _) => resp.status = sig as i32,
-					_ => {
-						info!("wrong status");
-						let f = sink.fail(RpcStatus::new(
-						RpcStatusCode::InvalidArgument,
-						Some(String::from("wait error"))))
-						.map_err(|_e| error!("wait error"));
-						ctx.spawn(f);
-						return;
-					}
-				}
-			}
-			
-			Err(e) => {
-				info!("wait process failed with: {}",
-					e.as_errno().unwrap().desc());
-				match e {
-					nix::Error::Sys(Errno::ECHILD) => {
-						// this definitely not right
-						// the exit status is probably not
-						// right. we should use subreaper
-						// and thread to gather process exit 
-						// status. register as subreaper,
-						// get SIGCHILD and then wait to get
-						// the correct status
-						info!("already exited");
-						resp.status = 0;
-					}
-
-					_ => {
-						let f = sink.fail(RpcStatus::new(
-							RpcStatusCode::InvalidArgument,
-							Some(String::from("wait error"))))
-						.map_err(|_e| error!("wait error"));
-						ctx.spawn(f);
-						return;
-					}
-				}
-			}
-		}
-		}
+        if exit_pipe_r != -1 {
+            let _ = unistd::read(exit_pipe_r, buf.as_mut_slice());
+        }
 
 		let mut sandbox = s.lock().unwrap();
 		let mut ctr = sandbox.get_container(cid.as_str()).unwrap();
@@ -433,6 +397,10 @@ impl protocols::agent_grpc::AgentService for agentService {
 		if p.term_master.is_some() {
 			let _ = unistd::close(p.term_master.unwrap());
 		}
+
+        if p.exit_pipe_r.is_some() {
+            let _ = unistd::close(p.exit_pipe_r.unwrap());
+        }
 
 		p.parent_stdin = None;
 		p.parent_stdout = None;
@@ -1216,10 +1184,10 @@ fn find_process<'a>(sandbox: &'a mut Sandbox, cid: &'a str, eid: &'a str, init: 
 	Ok(p)
 }
 
-pub fn start<S: Into<String>>(sandbox: Sandbox, host: S, port: u16) -> Server {
+pub fn start<S: Into<String>>(sandbox: Arc<Mutex<Sandbox>>, host: S, port: u16) -> Server {
     let env = Arc::new(EnvBuilder::new().build());
     let worker = agentService {
-        sandbox: Arc::new(Mutex::new(sandbox)),
+        sandbox: sandbox,
         test: 1,
     };
     let service = protocols::agent_grpc::create_agent_service(worker);

@@ -1,6 +1,7 @@
 //use crate::container::Container;
 use crate::namespace::{setup_persistent_ns, Namespace, NSTYPEIPC, NSTYPEUTS};
 use crate::network::Network;
+use libcontainer::process::Process;
 use libcontainer::container::LinuxContainer;
 use libcontainer::cgroups::Manager as CgroupManager;
 use libcontainer::cgroups::fs::Manager as FsManager;
@@ -8,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::mpsc::{Sender, Receiver};
 use libcontainer::errors;
 use libcontainer::container::BaseContainer;
+use libc::pid_t;
 
 #[derive(Debug, Default)]
 pub struct Sandbox {
@@ -89,6 +91,16 @@ impl Sandbox{
 
     pub fn get_container(&mut self, id: &str) -> Option<&mut LinuxContainer<FsManager>> {
         self.containers.get_mut(id)
+    }
+
+    pub fn find_process<'a>(&'a mut self, pid: pid_t) -> Option<&'a mut Process> {
+        for (_, c) in self.containers.iter_mut() {
+           if c.processes.get(&pid).is_some() {
+               return c.processes.get_mut(&pid);
+           }
+        }
+
+        None
     }
 
     // set_sandbox_storage sets the sandbox level reference

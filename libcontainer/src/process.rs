@@ -31,6 +31,8 @@ pub struct Process {
 	pub stdin: Option<RawFd>,
 	pub stdout: Option<RawFd>,
 	pub stderr: Option<RawFd>,
+	pub exit_pipe_r: Option<RawFd>,
+	pub exit_pipe_w: Option<RawFd>,
 	pub extra_files: Vec<File>,
 	pub console_width: u32,
 	pub console_height: u32,
@@ -51,6 +53,8 @@ pub struct Process {
 	// pid of the init/exec process. since we have no command
 	// struct to store pid, we must store pid here.
 	pub pid: pid_t,
+
+	pub exit_code: i32,
 }
 
 pub trait ProcessOperations {
@@ -85,6 +89,8 @@ impl Process {
 			stdin: None,
 			stdout: None,
 			stderr: None,
+			exit_pipe_w: None,
+			exit_pipe_r: None,
 			console_width: 0,
 			console_height: 0,
 			extra_files: Vec::new(),
@@ -100,6 +106,7 @@ impl Process {
 			to_close,
 			init,
 			pid: -1,
+			exit_code: 0,
 		};
 
 		info!("before create console socket!\n");

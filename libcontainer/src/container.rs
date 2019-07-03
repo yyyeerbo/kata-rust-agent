@@ -427,6 +427,12 @@ where T: CgroupManager
 				let _ = unistd::close(fd);
 			}
 
+			// create the pipes for notify process exited
+			let (exit_pipe_r, exit_pipe_w) = unistd::pipe2(OFlag::O_CLOEXEC).chain_err(
+				|| "failed to create pipe")?;
+			p.exit_pipe_w = Some(exit_pipe_w);
+			p.exit_pipe_r = Some(exit_pipe_r);
+
 			let console_fd = if p.parent_console_socket.is_some() {
 				p.parent_console_socket.unwrap()
 			} else {
