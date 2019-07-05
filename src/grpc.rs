@@ -40,19 +40,13 @@ use std::time::Duration;
 
 const SYSFS_MEMORY_BLOCK_SIZE_PATH: &'static str = "/sys/devices/system/memory/block_size_bytes";
 const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memory/probe";
+const CONTAINER_BASE: &'static str = "/run/agent";
 
 
 #[derive(Clone, Default)]
 struct agentService {
     sandbox: Arc<Mutex<Sandbox>>,
     test: u32,
-}
-
-lazy_static! {
-    static ref CTRS: Mutex<HashMap<String, LinuxContainer<FsManager>>> = {
-        let mut m = HashMap::new();
-        Mutex::new(m)
-    };
 }
 
 impl protocols::agent_grpc::AgentService for agentService {
@@ -71,10 +65,6 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         info!("receive createcontainer {}\n", &cid);
 
-        let _ = fs::remove_dir_all("/run/agent");
-
-        lazy_static::initialize(&CTRS);
-
         let opts = CreateOpts {
             cgroup_name: "".to_string(),
             use_systemd_cgroup: false,
@@ -85,9 +75,7 @@ impl protocols::agent_grpc::AgentService for agentService {
             rootless_cgroup: false,
         };
 
-        let _ = fs::create_dir_all("/run/agent");
-
-        let mut ctr: LinuxContainer<FsManager> = match LinuxContainer::new(cid.as_str(), "/run/agent", opts) {
+        let mut ctr: LinuxContainer<FsManager> = match LinuxContainer::new(cid.as_str(), CONTAINER_BASE, opts) {
             Ok(v) => v,
             Err(_) => {
                 info!("create contianer failed!\n");
@@ -855,6 +843,9 @@ impl protocols::agent_grpc::AgentService for agentService {
         let mut s = sandbox.lock().unwrap();
 
         let mut err = "".to_string();
+
+        let _ = fs::remove_dir_all(CONTAINER_BASE);
+        let _ = fs::create_dir_all(CONTAINER_BASE);
 
         s.hostname = req.hostname.clone();
         s.running = true;
