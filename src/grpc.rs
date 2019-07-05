@@ -14,6 +14,7 @@ use protocols::empty::Empty;
 use protocols::agent::{WriteStreamResponse, ReadStreamResponse, GuestDetailsResponse, AgentDetails, WaitProcessResponse, ListProcessesResponse};
 use protocols::health::{HealthCheckResponse_ServingStatus, HealthCheckResponse};
 use protobuf::{RepeatedField, SingularPtrField};
+use protocols::oci::{self, Spec, Linux, LinuxNamespace};
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -28,6 +29,7 @@ use libcontainer::process::ProcessOperations;
 use crate::mount::{add_storages, STORAGEHANDLERLIST};
 use crate::sandbox::Sandbox;
 use crate::version::{AGENT_VERSION, API_VERSION};
+use crate::namespace::{NSTYPEIPC, NSTYPEUTS};
 
 use std::fs;
 use libc::{self, pid_t, TIOCSWINSZ, winsize, c_ushort};
@@ -58,12 +60,16 @@ impl protocols::agent_grpc::AgentService for agentService {
     ) {
         let cid = req.container_id.clone();
         let eid = req.exec_id.clone();
-        let oci = req.OCI.as_ref().unwrap();
+
+        let mut oci_spec = req.OCI.clone();
+        let mut oci = oci_spec.as_mut().unwrap();
 
         let sandbox = self.sandbox.clone();
         let mut s = sandbox.lock().unwrap();
 
         info!("receive createcontainer {}\n", &cid);
+
+        update_container_namespaces(&s, oci);
 
         let opts = CreateOpts {
             cgroup_name: "".to_string(),
@@ -1240,5 +1246,37 @@ pub fn start<S: Into<String>>(sandbox: Arc<Mutex<Sandbox>>, host: S, port: u16) 
     for &(ref host, port) in server.bind_addrs() {
         info!("listening on {}:{}", host, port);
     }
+
     server
+}
+
+// This function updates the container namespaces configuration based on the
+// sandbox information. When the sandbox is created, it can be setup in a way
+// that all containers will share some specific namespaces. This is the agent
+// responsibility to create those namespaces so that they can be shared across
+// several containers.
+// If the sandbox has not been setup to share namespaces, then we assume all
+// containers will be started in their own new namespace.
+// The value of a.sandbox.sharedPidNs.path will always override the namespace
+// path set by the spec, since we will always ignore it. Indeed, it makes no
+// sense to rely on the namespace path provided by the host since namespaces
+// are different inside the guest.
+fn update_container_namespaces(sandbox: &Sandbox, spec: &mut Spec) -> Result<()> {
+    let mut linux = match spec.Linux.as_mut() {
+        None => return Err(ErrorKind::ErrorCode("Spec didn't container linux field".to_string()).into()),
+        Some(l) => l
+    };
+
+    let mut namespaces = linux.Namespaces.as_mut_slice();
+    for namespace in namespaces.iter_mut() {
+        if namespace.Type == NSTYPEIPC {
+            namespace.Path = sandbox.shared_ipcns.path.clone();
+        }
+
+        if namespace.Type == NSTYPEUTS {
+            namespace.Path = sandbox.shared_utsns.path.clone();
+        }
+    };
+
+    Ok(())
 }
