@@ -54,7 +54,7 @@ fn main() {
     setup_signal_handler(sandbox.clone()).unwrap();
 
     let (tx, rx) = mpsc::channel::<i32>();
-	s.sender = Some(tx);
+	sandbox.lock().unwrap().sender = Some(tx);
 
     //vsock:///dev/vsock, port
     let mut server = grpc::start(sandbox.clone(), VSOCK_ADDR, VSOCK_PORT);
