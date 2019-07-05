@@ -605,22 +605,53 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ReadStreamRequest,
         sink: ::grpcio::UnarySink<protocols::agent::ReadStreamResponse>,
     ) {
-		let cid = req.container_id.clone();
-		let eid = req.exec_id.clone();
-		// info!("read stdout for {}/{}", cid.clone(), eid.clone());
-		let s = Arc::clone(&self.sandbox);
-		let mut sandbox = s.lock().unwrap();
+		let cid = req.container_id;
+		let eid = req.exec_id;
 
-		let vector = match read_stream(&mut sandbox, cid.as_str(),
-			eid.as_str(), req.len as usize, true) {
+        let mut fd: RawFd = -1;
+		// info!("read stdout for {}/{}", cid.clone(), eid.clone());
+        {
+            let s = Arc::clone(&self.sandbox);
+            let mut sandbox = s.lock().unwrap();
+
+            let p = match find_process(&mut sandbox, cid.as_str(), eid.as_str(), false) {
+                Ok(v) => v,
+                Err(_) => {
+                    let f = sink.fail(RpcStatus::new(
+                        RpcStatusCode::Internal,
+                        Some(String::from("invalid argument!"))))
+                        .map_err(move |_e| error!(
+                            "read stream failed"));
+                    ctx.spawn(f);
+                    return;
+                }
+            };
+
+               fd = if p.term_master.is_some() {
+                p.term_master.unwrap()
+            } else if p.parent_stdout.is_some() {
+                p.parent_stdout.unwrap()
+            } else { -1 };
+        }
+
+        if fd == -1 {
+            let f = sink.fail(RpcStatus::new(
+                RpcStatusCode::Internal,
+                Some(String::from("invalid argument!"))))
+                .map_err(move |_e| error!("read stream failed"));
+            ctx.spawn(f);
+            return;
+        }
+
+        let vector = match read_stream(fd, cid.as_str(),
+			eid.as_str(), req.len as usize) {
 			Ok(v) => v,
 			Err(_) => {
 				let f = sink.fail(RpcStatus::new(
 					RpcStatusCode::Internal,
 					Some(String::from("read stream error!"))))
 				.map_err(move |_e| error!(
-				"read stream fail for container {} process {}",
-				cid.clone(), eid.clone()));
+				"read stream failed"));
 
 				ctx.spawn(f);
 				return;
@@ -631,7 +662,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 		resp.set_data(vector);
 
 		let f = sink.success(resp)
-			.map_err(move |_e| error!("read error for container {} process {}", cid.clone(), eid.clone()));
+			.map_err(move |_e| error!("read error for container {} process {}", cid, eid));
 
 		ctx.spawn(f);
     }
@@ -641,22 +672,53 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ReadStreamRequest,
         sink: ::grpcio::UnarySink<protocols::agent::ReadStreamResponse>,
     ) {
-		let cid = req.container_id.clone();
-		let eid = req.exec_id.clone();
-		// info!("read stderr for {}/{}", cid.clone(), eid.clone());
-		let s = Arc::clone(&self.sandbox);
-		let mut sandbox = s.lock().unwrap();
+        let cid = req.container_id;
+        let eid = req.exec_id;
+        let mut fd: RawFd = -1;
+        // info!("read stderr for {}/{}", cid.clone(), eid.clone());
+        {
+            let s = Arc::clone(&self.sandbox);
+            let mut sandbox = s.lock().unwrap();
 
-		let vector = match read_stream(&mut sandbox, cid.as_str(),
-			eid.as_str(), req.len as usize, false) {
+            let p = match find_process(&mut sandbox, cid.as_str(), eid.as_str(), false) {
+                Ok(v) => v,
+                Err(_) => {
+                    let f = sink.fail(RpcStatus::new(
+                        RpcStatusCode::Internal,
+                        Some(String::from("invalid argument!"))))
+                        .map_err(move |_e| error!(
+                            "read stream failed"));
+                    ctx.spawn(f);
+                    return;
+                }
+            };
+
+            fd = if p.term_master.is_some() {
+                p.term_master.unwrap()
+            } else if p.parent_stderr.is_some() {
+                p.parent_stderr.unwrap()
+            } else { -1 };
+        }
+
+        if fd == -1 {
+            let f = sink.fail(RpcStatus::new(
+                RpcStatusCode::Internal,
+                Some(String::from("invalid argument!"))))
+                .map_err(move |_e| error!(
+                    "read stream failed"));
+            ctx.spawn(f);
+            return;
+        }
+
+		let vector = match read_stream(fd, cid.as_str(),
+			eid.as_str(), req.len as usize) {
 			Ok(v) => v,
 			Err(_) => {
 				let f = sink.fail(RpcStatus::new(
 					RpcStatusCode::Internal,
 					Some(String::from("read stream error!"))))
 				.map_err(move |_e| error!(
-				"read stream fail for container {} process {}",
-				cid.clone(), eid.clone()));
+				"read stream failed"));
 
 				ctx.spawn(f);
 				return;
@@ -667,7 +729,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 		resp.set_data(vector);
 
 		let f = sink.success(resp)
-			.map_err(move |_e| error!("read error for container {} process {}", cid.clone(), eid.clone()));
+			.map_err(move |_e| error!("read error for container {} process {}", cid, eid));
 
 		ctx.spawn(f);
     }
@@ -1107,23 +1169,7 @@ fn get_agent_details() -> AgentDetails {
 	detail
 }
 
-fn read_stream(sandbox: &mut Sandbox, cid: &str, eid: &str, l: usize, stdout: bool) -> Result<Vec<u8>> {
-	let p = match find_process(sandbox, cid, eid, false) {
-		Ok(v) => v,
-		Err(_) => return Err(ErrorKind::ErrorCode(
-		"Invalid Argument!".to_string()).into()),
-	};
-
-	let fd = if p.term_master.is_some() {
-		p.term_master.unwrap()
-	} else {
-		if stdout {
-			p.parent_stdout.unwrap()
-		} else {
-			p.parent_stderr.unwrap()
-		}
-	};
-
+fn read_stream(fd: RawFd, cid: &str, eid: &str, l: usize) -> Result<Vec<u8>> {
 	let mut v: Vec<u8> = Vec::with_capacity(l);
 	unsafe { v.set_len(l); }
 
