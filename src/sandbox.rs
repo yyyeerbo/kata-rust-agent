@@ -5,6 +5,9 @@ use libcontainer::container::LinuxContainer;
 use libcontainer::cgroups::Manager as CgroupManager;
 use libcontainer::cgroups::fs::Manager as FsManager;
 use std::collections::HashMap;
+use std::sync::mpsc::{Sender, Receiver};
+use libcontainer::errors;
+use libcontainer::container::BaseContainer;
 
 #[derive(Debug, Default)]
 pub struct Sandbox {
@@ -21,6 +24,7 @@ pub struct Sandbox {
     pub no_pivot_root: bool,
     enable_grpc_trace: bool,
     sandbox_pid_ns: bool,
+	pub sender: Option<Sender<i32>>,
 }
 
 impl Sandbox{
@@ -43,6 +47,7 @@ impl Sandbox{
             no_pivot_root: false,
             enable_grpc_trace: false,
             sandbox_pid_ns: false,
+			sender: None,
         }
     }
 
@@ -106,4 +111,11 @@ impl Sandbox{
             }
         }
     }
+
+	pub fn destroy(&mut self) -> errors::Result<()> {
+		for (_, ctr) in &mut self.containers {
+			ctr.destroy()?;
+		}
+		Ok(())
+	}
 }

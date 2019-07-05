@@ -11,7 +11,7 @@ use libcontainer::process::Process;
 use libcontainer::specconv::CreateOpts;
 use libcontainer::errors::*;
 use protocols::empty::Empty;
-use protocols::agent::{WriteStreamResponse, ReadStreamResponse, GuestDetailsResponse, AgentDetails, WaitProcessResponse};
+use protocols::agent::{WriteStreamResponse, ReadStreamResponse, GuestDetailsResponse, AgentDetails, WaitProcessResponse, ListProcessesResponse};
 use protocols::health::{HealthCheckResponse_ServingStatus, HealthCheckResponse};
 use protobuf::{RepeatedField, SingularPtrField};
 
@@ -30,8 +30,13 @@ use crate::sandbox::Sandbox;
 use crate::version::{AGENT_VERSION, API_VERSION};
 
 use std::fs;
-use libc::pid_t;
+use libc::{self, pid_t, TIOCSWINSZ, winsize, c_ushort};
 use std::os::unix::io::RawFd;
+use std::process::{Command, Stdio};
+use serde_json;
+use std::thread;
+use std::sync::mpsc;
+use std::time::Duration;
 
 const SYSFS_MEMORY_BLOCK_SIZE_PATH: &'static str = "/sys/devices/system/memory/block_size_bytes";
 const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memory/probe";
@@ -189,6 +194,46 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::RemoveContainerRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+		let cid = req.container_id.clone();
+		let resp = Empty::new();
+
+		if req.timeout == 0 {
+			let s = Arc::clone(&self.sandbox);
+			let mut sandbox = s.lock().unwrap();
+			let ctr = sandbox.get_container(cid.as_str()).unwrap();
+
+			ctr.destroy().unwrap();
+			sandbox.containers.remove(cid.as_str());
+
+			let f = sink.success(resp)
+				.map_err(|_e| error!("cannot destroy container"));
+			ctx.spawn(f);
+			return;
+		}
+
+		// timeout != 0
+		let s = Arc::clone(&self.sandbox);
+		let cid2 = cid.clone();
+		let (tx, rx) = mpsc::channel();
+
+		let handle = thread::spawn(move || {
+			let mut sandbox = s.lock().unwrap();
+			let ctr = sandbox.get_container(cid2.as_str()).unwrap();
+
+			ctr.destroy().unwrap();
+			tx.send(1).unwrap();
+		});
+
+		rx.recv_timeout(Duration::from_secs(req.timeout as u64)).unwrap();
+		handle.join().unwrap();
+
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+		sandbox.containers.remove(cid.as_str());
+
+		let f = sink.success(resp)
+			.map_err(|_e| error!("remove container failed"));
+		ctx.spawn(f);
     }
     fn exec_process(
         &mut self,
@@ -406,6 +451,85 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ListProcessesRequest,
         sink: ::grpcio::UnarySink<protocols::agent::ListProcessesResponse>,
     ) {
+		let cid = req.container_id.clone();
+		let format = req.format.clone();
+		let mut args  = req.args.to_vec();
+		let mut resp = ListProcessesResponse::new();
+
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		let ctr = sandbox.get_container(cid.as_str()).unwrap();
+		let pids = ctr.processes().unwrap();
+
+		match format.as_str() {
+			"table" => {}
+			"json" => {
+				resp.process_list = serde_json::to_vec(&pids).unwrap();
+				let f = sink.success(resp)
+					.map_err(|_e| error!("cannot handle json resp"));
+				ctx.spawn(f);
+				return;
+			}
+			_ => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::InvalidArgument,
+					Some(String::from("invalid format"))))
+					.map_err(|_e| error!("invalid format!"));
+				ctx.spawn(f);
+				return;
+			}
+		}
+
+		// format "table"
+		if args.len() == 0 {
+			// default argument
+			args = vec!["-ef".to_string()];
+		}
+
+		let output = Command::new("ps")
+					.args(args.as_slice())
+					.stdout(Stdio::piped())
+					.output()
+					.expect("ps failed");
+
+		let out: String = String::from_utf8(output.stdout).unwrap();
+		let mut lines: Vec<String> = out.split('\n')
+					.map(|v| v.to_string())
+					.collect();
+
+		let predicate = |v| if v == "PID" {
+				return true;
+		} else {
+			return false;
+		};
+
+		let pid_index = lines[0].split_whitespace()
+					.position(predicate).unwrap();
+
+		let mut result = String::new();
+		result.push_str(lines[0].as_str());
+
+		lines.remove(0);
+		for line in &lines {
+			let fields: Vec<String> = line
+				.split_whitespace()
+				.map(|v| v.to_string())
+				.collect();
+			let pid = fields[pid_index].trim().parse::<i32>().unwrap();
+
+			for p in &pids {
+				if pid == *p {
+					result.push_str(line.as_str());
+				}
+			}
+		}
+
+		resp.process_list = Vec::from(result);
+
+		let f = sink.success(resp)
+				.map_err(|_e| error!("list processes failed"));
+		ctx.spawn(f);
     }
     fn update_container(
         &mut self,
@@ -631,14 +755,48 @@ impl protocols::agent_grpc::AgentService for agentService {
 			.map_err(|_e| error!("close stdin failed"));
 		ctx.spawn(f);
     }
+
     fn tty_win_resize(
         &mut self,
         ctx: ::grpcio::RpcContext,
         req: protocols::agent::TtyWinResizeRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
-        info!("tty_win_resize {:?} self.test={}", req, self.test);
-        self.test = 1;
+		let cid = req.container_id.clone();
+		let eid = req.exec_id.clone();
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+		let p = find_process(&mut sandbox, cid.as_str(), eid.as_str(), false).unwrap();
+
+		if p.term_master.is_none() {
+			let f = sink.fail(RpcStatus::new(
+				RpcStatusCode::Unavailable,
+				Some("no tty".to_string())))
+				.map_err(|_e| error!("tty resize"));
+			ctx.spawn(f);
+			return;
+		}
+
+		let fd = p.term_master.unwrap();
+		unsafe {
+			let win = winsize {
+				ws_row: req.row as c_ushort,
+				ws_col: req.column as c_ushort,
+				ws_xpixel: 0,
+				ws_ypixel: 0,
+			};
+
+			let err = libc::ioctl(fd, TIOCSWINSZ, &win);
+			if let Err(_) = Errno::result(err).map(drop) {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::Internal,
+					Some("ioctl error".to_string())))
+				.map_err(|_e| error!("ioctl error!"));
+				ctx.spawn(f);
+				return;
+			}
+		}
+
         let empty = protocols::empty::Empty::new();
         let f = sink
             .success(empty)
@@ -778,6 +936,15 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::DestroySandboxRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+		// destroy all containers, clean up, notify agent to exit 
+		// etc.
+		sandbox.destroy().unwrap();
+
+		sandbox.sender.as_ref().unwrap().send(1).unwrap();
+		sandbox.sender = None;
+
         let empty = protocols::empty::Empty::new();
         let f = sink
             .success(empty)

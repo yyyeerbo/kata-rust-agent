@@ -7,6 +7,7 @@ extern crate log;
 extern crate libcontainer;
 extern crate protocols;
 extern crate prctl;
+extern crate serde_json;
 
 use futures::sync::oneshot;
 use futures::*;
@@ -19,6 +20,7 @@ use std::env;
 use std::time::Duration;
 use std::path::Path;
 use prctl::set_child_subreaper;
+use std::sync::mpsc::{self, Sender, Receiver};
 
 
 mod mount;
@@ -26,6 +28,7 @@ mod namespace;
 mod network;
 mod sandbox;
 mod version;
+pub mod netlink;
 
 use namespace::Namespace;
 use network::Network;
@@ -46,25 +49,30 @@ fn main() {
     setup_signal_handler().unwrap();
 
     // Initialize unique sandbox structure.
-    let s:Sandbox = Sandbox::new();
+    let mut s:Sandbox = Sandbox::new();
 
     wait_for_vsock_dev(VSOCK_DEV_PATH);
+
+    let (tx, rx) = mpsc::channel::<i32>();
+	s.sender = Some(tx);
 
     //vsock:///dev/vsock, port
     let mut server = grpc::start(s, VSOCK_ADDR, VSOCK_PORT);
 
-    let (tx, rx) = oneshot::channel();
-    thread::spawn(move || {
-        info!("Press ENTER to exit...");
-        let _ = io::stdin().read(&mut [0]).unwrap();
-        thread::sleep(Duration::from_secs(3000));
+    let handle = thread::spawn(move || {
+        // info!("Press ENTER to exit...");
+        // let _ = io::stdin().read(&mut [0]).unwrap();
+        // thread::sleep(Duration::from_secs(3000));
 
-        tx.send(())
+        let _ = rx.recv().unwrap();
     });
 	// receive something from destroy_sandbox here?
 	// or in the thread above? It depneds whether grpc request
 	// are run in another thread or in the main thead?
-    let _ = rx.wait();
+    // let _ = rx.wait();
+	
+	handle.join().unwrap();
+
     let _ = server.shutdown().wait();
     let _ = fs::remove_file("/tmp/testagent");
 }
