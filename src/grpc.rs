@@ -299,7 +299,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
 		let cid = req.container_id.clone();
-		let eid = req.container_id.clone();
+		let eid = req.exec_id.clone();
 		let s = Arc::clone(&self.sandbox);
 		let mut sandbox = s.lock().unwrap();
 
