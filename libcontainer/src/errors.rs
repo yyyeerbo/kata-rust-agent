@@ -13,6 +13,7 @@ error_chain! {
 		Serde(serde_json::Error);
 		UTF8(std::string::FromUtf8Error);
 		Parse(std::num::ParseIntError);
+		Scanfmt(scan_fmt::parse::ScanError);
 	}
 	// define new errors
 	errors {

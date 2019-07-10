@@ -9,6 +9,8 @@ extern crate protocols;
 extern crate prctl;
 extern crate serde_json;
 extern crate signal_hook;
+#[macro_use]
+extern crate scan_fmt;
 
 use futures::sync::oneshot;
 use futures::*;
