@@ -290,7 +290,17 @@ impl protocols::agent_grpc::AgentService for agentService {
 			}
 		};
 
-		let _ = ctr.run(p);
+		match ctr.run(p) {
+			Err(e) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::Internal,
+					Some(e.to_string())))
+					.map_err(move |e| error!("connt exec process {}", cid.clone()));
+				ctx.spawn(f);
+				return;
+			},
+			Ok(_) => ()
+		};
 
 		let resp = Empty::new();
 		let f = sink.success(resp)
