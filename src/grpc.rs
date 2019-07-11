@@ -1238,6 +1238,7 @@ pub fn start<S: Into<String>>(sandbox: Arc<Mutex<Sandbox>>, host: S, port: u16) 
     let mut server = ServerBuilder::new(env)
         .register_service(service)
         .register_service(hservice)
+		.requests_slot_per_cq(1024)
         .bind(host, port)
         .build()
         .unwrap();
