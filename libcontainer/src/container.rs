@@ -250,7 +250,6 @@ pub struct SyncPC {
 	pid: pid_t,
 }
 
-
 pub trait Container: BaseContainer {
 //	fn checkpoint(&self, opts: &CriuOpts) -> Result<()>;
 //	fn restore(&self, p: &Process, opts: &CriuOpts) -> Result<()>;
@@ -411,13 +410,6 @@ where T: CgroupManager
 			// defer!({ self.processes.insert(p.pid, p); () });
 			// parent process need to receive ptmx masterfd
 			// and set it up in process struct
-
-			fcntl::fcntl(p.parent_stdin.unwrap(),
-					FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
-			fcntl::fcntl(p.parent_stdout.unwrap(),
-					FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
-			fcntl::fcntl(p.parent_stderr.unwrap(),
-					FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
 
 			unistd::close(p.stdin.unwrap())?;
 			unistd::close(p.stderr.unwrap())?;
