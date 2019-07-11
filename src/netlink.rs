@@ -1045,7 +1045,7 @@ impl Default for nlmsgerr {
 	}
 }
 
-#[derive(Copy)]
+// #[derive(Copy)]
 pub struct RtnlHandle {
 	fd: libc::c_int,
 	local: libc::sockaddr_nl,
@@ -1154,6 +1154,8 @@ impl RtnlHandle {
 			mem::zeroed::<libc::sockaddr_nl>()
 		};
 
+		sa.nl_family = libc::AF_NETLINK as u16;
+
 		unsafe {
 			let nh = data.as_mut_ptr() as *mut nlmsghdr;
 			let mut iov: libc::iovec = libc::iovec {
@@ -1236,78 +1238,76 @@ impl RtnlHandle {
 	}
 
 	unsafe fn recv_dump_message(&self) -> Result<(Vec<Vec<u8>>, Vec<*const nlmsghdr>)> {
-		unsafe {
-			let mut slv: Vec<Vec<u8>> = Vec::new();
-			let mut lv: Vec<*const nlmsghdr> = Vec::new();
+		let mut slv: Vec<Vec<u8>> = Vec::new();
+		let mut lv: Vec<*const nlmsghdr> = Vec::new();
 
-			loop {
-				let buf = self.recv_message()?;
+		loop {
+			let buf = self.recv_message()?;
 
-				let mut msglen = buf.len() as u32;
-				let mut nlh = buf.as_ptr() as *const nlmsghdr;
-				let mut dump_intr = 0;
-				let mut done = 0;
+			let mut msglen = buf.len() as u32;
+			let mut nlh = buf.as_ptr() as *const nlmsghdr;
+			let mut dump_intr = 0;
+			let mut done = 0;
 
-				while NLMSG_OK!(nlh, msglen) {
-					if (*nlh).nlmsg_pid != self.local.nl_pid
-						|| (*nlh).nlmsg_seq != self.dump {
-							nlh = NLMSG_NEXT!(nlh, msglen);
-							continue;
-					}
-
-				// got one nlmsg
-					if (*nlh).nlmsg_flags & NLM_F_DUMP_INTR > 0 {
-						dump_intr = 1;
-					}
-
-					if (*nlh).nlmsg_type == NLMSG_DONE {
-						done = 1;
-					}
-
-					if (*nlh).nlmsg_type == NLMSG_ERROR {
-						// error message, better to return 
-						// error code in error messages
-
-						if (*nlh).nlmsg_len < NLMSG_LENGTH!(
-								mem::size_of::<nlmsgerr>()) {
-							// truncated
-							return Err(ErrorKind::ErrorCode(
-								"truncated message".to_string()).into());
-						}
-
-						let el: *const nlmsgerr = NLMSG_DATA!(nlh) as *const nlmsgerr;
-						return Err(ErrorKind::Nix(nix::Error::Sys(
-							Errno::from_i32(-(*el).error))).into());
-					}
-
-					lv.push(nlh);
-
-					if done ==1 {
-						break;
-					}
-
-					nlh = NLMSG_NEXT!(nlh, msglen);
+			while NLMSG_OK!(nlh, msglen) {
+				if (*nlh).nlmsg_pid != self.local.nl_pid
+					|| (*nlh).nlmsg_seq != self.dump {
+						nlh = NLMSG_NEXT!(nlh, msglen);
+						continue;
 				}
 
-				slv.push(buf);
+			// got one nlmsg
+				if (*nlh).nlmsg_flags & NLM_F_DUMP_INTR > 0 {
+					dump_intr = 1;
+				}
 
-				if done == 1 {
-					if dump_intr == 1 {
-						info!("dump interuppted, maybe incomplete");
+				if (*nlh).nlmsg_type == NLMSG_DONE {
+					done = 1;
+				}
+
+				if (*nlh).nlmsg_type == NLMSG_ERROR {
+					// error message, better to return 
+					// error code in error messages
+
+					if (*nlh).nlmsg_len < NLMSG_LENGTH!(
+							mem::size_of::<nlmsgerr>()) {
+						// truncated
+						return Err(ErrorKind::ErrorCode(
+							"truncated message".to_string()).into());
 					}
 
+					let el: *const nlmsgerr = NLMSG_DATA!(nlh) as *const nlmsgerr;
+					return Err(ErrorKind::Nix(nix::Error::Sys(
+						Errno::from_i32(-(*el).error))).into());
+				}
+
+				lv.push(nlh);
+
+				if done ==1 {
 					break;
 				}
 
-				// still remain some bytes?
-
-				if msglen != 0 {
-					return Err(ErrorKind::Nix(nix::Error::Sys(
-						Errno::EINVAL)).into());
-				}
+				nlh = NLMSG_NEXT!(nlh, msglen);
 			}
-			Ok((slv, lv))
+
+			slv.push(buf);
+
+			if done == 1 {
+				if dump_intr == 1 {
+					info!("dump interuppted, maybe incomplete");
+				}
+
+				break;
+			}
+
+			// still remain some bytes?
+
+			if msglen != 0 {
+				return Err(ErrorKind::Nix(nix::Error::Sys(
+					Errno::EINVAL)).into());
+			}
 		}
+		Ok((slv, lv))
 	}
 
 	fn list_interfaces(&mut self) -> Result<Vec<Interface>> {
@@ -1493,6 +1493,55 @@ impl RtnlHandle {
 
 		return Err(ErrorKind::Nix(nix::Error::Sys(
 			Errno::ENODEV)).into());
+	}
+
+	fn find_link_by_name(&mut self, name: &str) -> Result<ifinfomsg> {
+		let mut v: Vec<u8> = vec![0; 2048];
+		unsafe {
+			let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
+			let mut ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
+			let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
+
+			(*nlh).nlmsg_len = NLMSG_LENGTH!(mem::size_of::<ifinfomsg>()) as __u32;
+			(*nlh).nlmsg_type = RTM_GETLINK;
+			(*nlh).nlmsg_flags = NLM_F_REQUEST;
+
+			self.seq += 1;
+			(*nlh).nlmsg_seq = self.seq;
+
+			(*ifi).ifi_family = libc::AF_UNSPEC as u8;
+
+			let mut l = RTA_LENGTH!(name.len() + 1) as __u16;
+			(*rta).rta_type = IFLA_IFNAME;
+			(*rta).rta_len = l;
+
+			let mut p: *mut libc::c_void = RTA_DATA!(rta) as *mut libc::c_void;
+
+			libc::memcpy(p, name.as_ptr() as *const libc::c_void,
+				name.len());
+
+			(*nlh).nlmsg_len = NLMSG_ALIGN!((*nlh).nlmsg_len)
+				+ RTA_ALIGN!(l);
+
+			rta = NLMSG_TAIL!(nlh) as *mut rtattr;
+			l = RTA_LENGTH!(mem::size_of::<u32>()) as __u16;
+			(*rta).rta_type = IFLA_EXT_MASK;
+			(*rta).rta_len = l;
+
+			let mut data: *mut __u32 = RTA_DATA!(rta) as *mut __u32;
+			*data = RTEXT_FILTER_VF | RTEXT_FILTER_SKIP_STATS;
+
+			(*nlh).nlmsg_len = NLMSG_ALIGN!((*nlh).nlmsg_len)
+					+ RTA_ALIGN!(l);
+
+			let mut retv = self.rtnl_talk(v.as_mut_slice(), true)?;
+
+			nlh = retv.as_mut_ptr() as *mut nlmsghdr;
+			ifi = NLMSG_DATA!(nlh) as *mut ifinfomsg;
+
+			return Ok(ifinfomsg { ..*ifi });
+		}
+
 	}
 
 	fn rtnl_talk(&mut self, data: &mut [u8], answer: bool) -> Result<Vec<u8>> {
@@ -1773,14 +1822,346 @@ impl RtnlHandle {
 		//	Errno::EOPNOTSUPP)).into());
 	}
 
-	fn list_routes(&self) -> Result<Vec<Route>> {
-		return Err(ErrorKind::Nix(nix::Error::Sys(
-			Errno::EOPNOTSUPP)).into());
+	fn remove_interface(&mut self, iface: &Interface) -> Result<Interface> {
+		let ifinfo = self.find_link_by_hwaddr(iface.hwAddr.as_str())?;
+		self.set_link_status(&ifinfo, false)?;
+
+		// delete this link per request
+		let mut v: Vec<u8> = vec![0; 2048];
+		unsafe {
+			let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
+			let mut ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
+			// No attributes needed?
+			(*nlh).nlmsg_len = NLMSG_LENGTH!(
+				mem::size_of::<ifinfomsg>()) as __u32;
+			(*nlh).nlmsg_type = RTM_DELLINK;
+			(*nlh).nlmsg_flags = NLM_F_REQUEST;
+
+			self.seq += 1;
+			(*nlh).nlmsg_seq = self.seq;
+
+			(*ifi).ifi_family = ifinfo.ifi_family;
+			(*ifi).ifi_index = ifinfo.ifi_index;
+			(*ifi).ifi_type = ifinfo.ifi_type;
+
+			self.rtnl_talk(v.as_mut_slice(), false)?;
+		}
+
+		Ok(iface.clone())
 	}
 
-	fn update_route(&self, rt: &Vec<Route>) -> Result<Vec<Route>> {
-		return Err(ErrorKind::Nix(nix::Error::Sys(
-			Errno::EOPNOTSUPP)).into());
+	fn get_name_by_index(&mut self, index: i32) -> Result<String> {
+		let mut v: Vec<u8> = vec![0; 2048];
+		unsafe {
+			let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
+			let mut ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
+
+			let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
+			(*nlh).nlmsg_len = NLMSG_LENGTH!(
+				mem::size_of::<ifinfomsg>()) as __u32;
+			(*nlh).nlmsg_type = RTM_GETLINK;
+			(*nlh).nlmsg_flags = NLM_F_REQUEST;
+
+			self.seq += 1;
+			(*nlh).nlmsg_seq = self.seq;
+
+			(*ifi).ifi_index = index;
+
+			let l = RTA_LENGTH!(mem::size_of::<u32>()) as __u16;
+			(*rta).rta_type = IFLA_EXT_MASK;
+			(*rta).rta_len = l;
+
+			let mut data: *mut u32 = RTA_DATA!(rta) as *mut u32;
+			*data = RTEXT_FILTER_VF | RTEXT_FILTER_SKIP_STATS;
+
+			(*nlh).nlmsg_len = NLMSG_ALIGN!((*nlh).nlmsg_len)
+						+ RTA_ALIGN!(l);
+
+			let mut retv = self.rtnl_talk(v.as_mut_slice(), true)?;
+			
+			let mut nlh: *mut nlmsghdr = retv.as_mut_ptr() as *mut nlmsghdr;
+			let mut ifi: *mut ifinfomsg = retv.as_mut_ptr() as *mut ifinfomsg;
+			let mut rta: *mut rtattr = IFLA_RTA!(rta) as *mut rtattr;
+			let mut rtalen = IFLA_PAYLOAD!(nlh) as u32;
+
+			let attrs = parse_attrs(rta, rtalen, (IFLA_MAX + 1) as usize)?;
+			
+			let t = attrs[IFLA_IFNAME as usize];
+			if t as i64 != 0 {
+				// we have a name
+				let data: *mut u8 = RTA_DATA!(rta) as *mut u8;
+				let datalen = RTA_PAYLOAD!(t) as usize;
+				return Ok(String::from_raw_parts(data, datalen, datalen));
+			}
+		}
+
+		Err(ErrorKind::ErrorCode("no name".to_string()).into())
+	}
+
+	fn list_routes(&mut self) -> Result<Vec<Route>> {
+		// currently, only dump routes from main table for ipv4
+		// ie, rtmsg.rtmsg_family = AF_INET, set RT_TABLE_MAIN
+		// attribute in dump request
+		// Fix Me: think about othe tables, ipv6..
+		let mut rs: Vec<Route> = Vec::new();
+
+		unsafe {
+			let (mut srv, mut rv) = self.dump_all_route_msgs()?;
+
+			// parse out routes and store in rs
+			for r in &rv {
+				let nlh: *const nlmsghdr = *r;
+				let rtm: *const rtmsg = NLMSG_DATA!(nlh) as *const rtmsg;
+				let mut rta: *mut rtattr = RTM_RTA!(rtm) as *mut rtattr;
+				let mut rtalen = RTM_PAYLOAD!(nlh) as u32;
+
+				let attrs = parse_attrs(rta, rtalen, (RTA_MAX + 1) as usize)?;
+				// find source, destination, gateway, scope, and
+				// and device name
+
+				let mut t = attrs[RTA_DST as usize];
+				let mut rte: Route = Route::default();
+
+				// destination
+				if t as i64 != 0 {
+					let mut data: *const u8 = RTA_DATA!(t) as *const u8;
+					let len = RTA_PAYLOAD!(t) as u32;
+					rte.dest = format!("{}/{}",
+						format_address(data, len)?,
+						(*rtm).rtm_dst_len);
+				}
+
+				// gateway
+				t = attrs[RTA_GATEWAY as usize];
+				if t as i64 != 0 {
+					let mut data:*const u8 = RTA_DATA!(t) as *const u8;
+					let len = RTA_PAYLOAD!(t) as u32;
+					rte.gateway = format_address(data, len)?;
+				}
+
+				// source
+				t = attrs[RTA_SRC as usize];
+				if t as i64 != 0 {
+					let mut data: *const u8 = RTA_DATA!(t) as *const u8;
+					let len = RTA_PAYLOAD!(t) as u32;
+					rte.source = format!("{}/{}",
+						format_address(data, len)?,
+						(*rtm).rtm_src_len);
+				}
+
+				// scope
+				rte.scope = (*rtm).rtm_scope as u32;
+
+				// oif
+				t = attrs[RTA_OIF as usize];
+				if t as i64 != 0 {
+					let data: *const i32 = RTA_DATA!(t) as *const i32;
+					assert_eq!(RTA_PAYLOAD!(t), 4);
+					rte.device = self.get_name_by_index(*data)?;
+				}
+
+				rs.push(rte);
+			}
+		}
+
+		Ok(rs)
+	}
+
+	unsafe fn dump_all_route_msgs(&mut self) -> Result<(Vec<Vec<u8>>, Vec<*const nlmsghdr>)> {
+		let mut v: Vec<u8> = vec![0; 2048];
+		let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
+		let mut rtm: *mut rtmsg = NLMSG_DATA!(nlh) as *mut rtmsg;
+		let mut rta: *mut rtattr = RTM_RTA!(rtm) as *mut rtattr;
+
+		(*nlh).nlmsg_len = NLMSG_LENGTH!(
+			mem::size_of::<rtmsg>()) as u32;
+		(*nlh).nlmsg_type = RTM_GETROUTE;
+		(*nlh).nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+
+		self.seq += 1;
+		self.dump = self.seq;
+		(*nlh).nlmsg_seq = self.seq;
+
+		(*rtm).rtm_family = libc::AF_INET as u8;
+
+		let l = RTA_LENGTH!(mem::size_of::<u32>()) as u16;
+		(*rta).rta_type = RTA_TABLE;
+		(*rta).rta_len = l;
+
+		let mut data: *mut u32 = RTA_DATA!(rta) as *mut u32;
+		*data = RT_TABLE_MAIN;
+
+		(*nlh).nlmsg_len = NLMSG_ALIGN!((*nlh).nlmsg_len)
+				+ RTA_ALIGN!(l);
+		self.send_message(v.as_mut_slice())?;
+
+		self.recv_dump_message()
+	}
+
+	fn get_all_routes(&mut self) -> Result<Vec<RtRoute>> {
+		let mut rs: Vec<RtRoute> = Vec::new();
+
+		unsafe {
+			let (mut srv, mut rv) = self.dump_all_route_msgs()?;
+
+			for r in &rv {
+				let nlh: *const nlmsghdr = *r;
+				let rtm: *const rtmsg = NLMSG_DATA!(nlh) as *const rtmsg;
+				let mut rta: *mut rtattr = RTM_RTA!(rtm) as *mut rtattr;
+				let mut rtalen = RTM_PAYLOAD!(nlh) as u32;
+
+				let attrs = parse_attrs(rta, rtalen, (RTA_MAX + 1) as usize)?;
+				// find source, destination, gateway, scope, and
+				// and device name
+
+				let mut t = attrs[RTA_DST as usize];
+				let mut rte: RtRoute = RtRoute::default();
+
+				// destination
+				if t as i64 != 0 {
+					let mut data: *mut u8 = RTA_DATA!(t) as *mut u8;
+					let len = RTA_PAYLOAD!(t) as usize;
+					rte.dest = Vec::from_raw_parts(data,
+						len, len);
+				}
+
+				// gateway
+				t = attrs[RTA_GATEWAY as usize];
+				if t as i64 != 0 {
+					let mut data: *mut u8 = RTA_DATA!(t) as *mut u8;
+					let len = RTA_PAYLOAD!(t) as usize;
+					rte.gateway = Vec::from_raw_parts(data, len, len);
+				}
+
+				// source
+				t = attrs[RTA_SRC as usize];
+				if t as i64 != 0 {
+					let mut data: *mut u8 = RTA_DATA!(t) as *mut u8;
+					let len = RTA_PAYLOAD!(t) as usize;
+					rte.source = Vec::from_raw_parts(data, len, len);
+				}
+
+				// scope
+				rte.scope = (*rtm).rtm_scope;
+
+				// oif
+				t = attrs[RTA_OIF as usize];
+				if t as i64 != 0 {
+					let data: *const i32 = RTA_DATA!(t) as *const i32;
+					assert_eq!(RTA_PAYLOAD!(t), 4);
+					rte.index = *data;
+				}
+
+				rs.push(rte);
+			}
+		}
+
+		Ok(rs)
+	}
+
+	fn delete_all_routes(&mut self, rs: &Vec<RtRoute>) -> Result<()>{
+		for r in rs {
+			let name = self.get_name_by_index(r.index)?;
+			if name.as_str() == "lo"
+				|| name.as_str() == "::1" {
+				continue;
+			}
+			self.delete_one_route(r)?;
+		}
+
+		Ok(())
+	}
+
+	fn add_one_route(&mut self, r: &RtRoute) -> Result<()> {
+		let mut v: Vec<u8> = vec![0; 2048];
+
+		unsafe {
+			let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
+			let mut rtm: *mut rtmsg = NLMSG_DATA!(nlh) as *mut rtmsg;
+
+			(*nlh).nlmsg_len = NLMSG_LENGTH!(
+				mem::size_of::<rtmsg>()) as u32;
+			(*nlh).nlmsg_type = RTM_NEWROUTE;
+			(*nlh).nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_EXCL;
+
+			self.seq += 1;
+			self.dump = self.seq;
+			(*nlh).nlmsg_seq = self.seq;
+
+			(*rtm).rtm_family = libc::AF_INET as u8;
+			(*rtm).rtm_table = RT_TABLE_MAIN as u8;
+			(*rtm).rtm_scope = RT_SCOPE_NOWHERE;
+			(*rtm).rtm_protocol = RTPROTO_BOOT;
+			(*rtm).rtm_scope = RT_SCOPE_UNIVERSE;
+			(*rtm).rtm_type = RTN_UNICAST;
+
+			(*rtm).rtm_dst_len = r.dst_len;
+			(*rtm).rtm_src_len = r.src_len;
+			(*rtm).rtm_scope = r.scope;
+
+			addattr_var(nlh, RTA_SRC, r.source.as_ptr() as *const u8, r.source.len());
+			addattr_var(nlh, RTA_DST, r.dest.as_ptr() as *const u8, r.dest.len());
+			addattr_var(nlh, RTA_GATEWAY, r.gateway.as_ptr() as *const u8, r.gateway.len());
+			addattr32(nlh, RTA_OIF, r.index as u32);
+
+			self.rtnl_talk(v.as_mut_slice(), false)?;
+		}
+		Ok(())
+	}
+
+	fn delete_one_route(&mut self, r: &RtRoute) -> Result<()> {
+		let mut v: Vec<u8> = vec![0; 2048];
+		unsafe {
+			let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
+			let mut rtm: *mut rtmsg = NLMSG_DATA!(nlh) as *mut rtmsg;
+
+			(*nlh).nlmsg_len = NLMSG_LENGTH!(
+				mem::size_of::<rtmsg>()) as u32;
+			(*nlh).nlmsg_type = RTM_DELROUTE;
+			(*nlh).nlmsg_flags = NLM_F_REQUEST;
+
+			self.seq += 1;
+			self.dump = self.seq;
+			(*nlh).nlmsg_seq = self.seq;
+
+			(*rtm).rtm_family = libc::AF_INET as u8;
+			(*rtm).rtm_table = RT_TABLE_MAIN as u8;
+			(*rtm).rtm_scope = RT_SCOPE_NOWHERE;
+
+			(*rtm).rtm_dst_len = r.dst_len;
+			(*rtm).rtm_src_len = r.src_len;
+			(*rtm).rtm_scope = r.scope;
+
+			addattr_var(nlh, RTA_SRC, r.source.as_ptr() as *const u8, r.source.len());
+			addattr_var(nlh, RTA_DST, r.dest.as_ptr() as *const u8, r.dest.len());
+			addattr_var(nlh, RTA_GATEWAY, r.gateway.as_ptr() as *const u8, r.gateway.len());
+			addattr32(nlh, RTA_OIF, r.index as u32);
+
+			self.rtnl_talk(v.as_mut_slice(), false)?;
+		}
+
+		Ok(())
+	}
+
+	fn update_routes(&mut self, rt: &Vec<Route>) -> Result<Vec<Route>> {
+		let rs = self.get_all_routes()?;
+		self.delete_all_routes(&rs)?;
+
+		for grpcroute in rt {
+			if grpcroute.gateway.as_str() == "" {
+				let r = RtRoute::from(grpcroute.clone());
+				self.add_one_route(&r)?;
+			}
+		}
+
+		for grpcroute in rt {
+			if grpcroute.gateway.as_str() != "" {
+				let r = RtRoute::from(grpcroute.clone());
+				self.add_one_route(&r)?;
+			}
+		}
+
+		Ok(rt.clone())
 	}
 }
 
@@ -1798,6 +2179,78 @@ unsafe fn parse_attrs(mut rta: *mut rtattr, mut rtalen: u32, max: usize) -> Resu
 	}
 
 	Ok(attrs)
+}
+
+unsafe fn addattr_var(mut nlh: *mut nlmsghdr, cat: u16, data: *const u8, len: usize) {
+	let mut rta: *mut rtattr = NLMSG_TAIL!(nlh) as *mut rtattr;
+	let alen = RTA_LENGTH!(len) as u16;
+
+	(*rta).rta_type = cat;
+	(*rta).rta_len = alen;
+
+	if len > 0 {
+		libc::memcpy(RTA_DATA!(rta) as *mut libc::c_void,
+			data as *const libc::c_void, len);
+	}
+
+	(*nlh).nlmsg_len = NLMSG_ALIGN!((*nlh).nlmsg_len)
+				+ RTA_ALIGN!(alen);
+}
+
+unsafe fn addattr_size(mut nlh: *mut nlmsghdr, cat: u16, val: u64,
+size: u8) {
+	assert_eq!(size == 1 || size == 2
+		|| size == 4 || size == 8, true);
+
+	let mut rta: *mut rtattr = NLMSG_TAIL!(nlh) as *mut rtattr;
+	(*rta).rta_type = cat;
+
+	if size == 1 {
+		let mut data: *mut u8 = RTA_DATA!(rta) as *mut u8;
+		*data = val as u8;
+		let len = RTA_LENGTH!(1) as u16;
+		(*rta).rta_len = len;
+	}
+
+	if size == 2 {
+		let mut data: *mut u16 = RTA_DATA!(rta) as *mut u16;
+		*data = val as u16;
+		let len = RTA_LENGTH!(2) as u16;
+		(*rta).rta_len = len;
+	}
+
+	if size == 4 {
+		let mut data: *mut u32 = RTA_DATA!(rta) as *mut u32;
+		*data = val as u32;
+		let len = RTA_LENGTH!(4) as u16;
+		(*rta).rta_len = len;
+	}
+
+	if size == 8 {
+		let mut data: *mut u64 = RTA_DATA!(rta) as *mut u64;
+		*data = val as u64;
+		let len = RTA_LENGTH!(8) as u16;
+		(*rta).rta_len = len;
+	}
+
+	(*nlh).nlmsg_len = NLMSG_ALIGN!((*nlh).nlmsg_len)
+			+ RTA_ALIGN!((*rta).rta_len);
+}
+
+unsafe fn addattr8(mut nlh: *mut nlmsghdr, cat: u16, val: u8) {
+	addattr_size(nlh, cat, val as u64, 1);
+}
+
+unsafe fn addattr16(mut nlh: *mut nlmsghdr, cat: u16, val: u16) {
+	addattr_size(nlh, cat, val as u64, 2);
+}
+
+unsafe fn addattr32(mut nlh: *mut nlmsghdr, cat: u16, val: u32) {
+	addattr_size(nlh, cat, val as u64, 4);
+}
+
+unsafe fn addattr64(mut nlh: *mut nlmsghdr, cat: u16, val: u64) {
+	addattr_size(nlh, cat, val, 8);
 }
 
 unsafe fn format_address(mut addr: *const u8, len: u32) -> Result<String> {
@@ -1853,6 +2306,91 @@ unsafe fn format_address(mut addr: *const u8, len: u32) -> Result<String> {
 		Errno::EINVAL)).into());
 }
 
+impl Drop for RtnlHandle {
+	fn drop(&mut self) {
+		unsafe { libc::close(self.fd); }
+	}
+}
+
+pub struct RtRoute {
+	pub dest: Vec<u8>,
+	pub source: Vec<u8>,
+	pub gateway: Vec<u8>,
+	pub index: i32,
+	pub scope: u8,
+	pub dst_len: u8,
+	pub src_len: u8,
+}
+
+impl Default for RtRoute {
+	fn default() -> Self {
+		unsafe {
+			mem::zeroed::<Self>()
+		}
+	}
+}
+
+fn parse_cidripv4(s: &str) -> Result<(Vec<u8>, u8)> {
+	let (a0, a1, a2, a3, len) = scan_fmt!(s,
+		"{}.{}.{}.{}/{}", u8, u8, u8, u8, u8)?;
+	let ip: Vec<u8> = vec![a0, a1, a2, a3];
+	Ok((ip, len))
+}
+
+fn parse_ipv4(s: &str) -> Result<Vec<u8>> {
+	let (a0, a1, a2, a3) = scan_fmt!(s, "{}.{}.{}.{}",
+		u8, u8, u8, u8)?;
+	let ip: Vec<u8> = vec![a0, a1, a2, a3];
+
+	Ok(ip)
+}
+
+impl From<Route> for RtRoute {
+	fn from(r: Route) -> Self {
+		// only handle ipv4
+
+		let rt: RtRoute = RtRoute::default();
+		let index = {
+			let mut rh = RtnlHandle::new()
+					.unwrap();
+			rh.find_link_by_name(r.device.as_str())
+			.unwrap()
+			.ifi_index
+		};
+
+		let (dest, dst_len) = if r.dest.is_empty() {
+			(vec![0 as u8; 4], 0)
+		} else {
+			parse_cidripv4(r.dest.as_str())
+			.unwrap()
+		};
+
+		let (source, src_len) = if r.source.is_empty() {
+			(vec![0 as u8; 4], 0)
+		} else {
+			parse_cidripv4(r.source.as_str())
+			.unwrap()
+		};
+
+		let gateway = if r.gateway.is_empty() {
+			vec![0 as u8; 4]
+		} else {
+			parse_ipv4(r.gateway.as_str())
+			.unwrap()
+		};
+
+		Self {
+			dest,
+			source,
+			src_len,
+			dst_len,
+			index,
+			gateway,
+			scope: r.scope as u8,
+		}
+	}
+}
+
 pub struct RtIPAddr {
 	pub ip_family: __u8,
 	pub ip_mask: __u8,
@@ -1868,20 +2406,17 @@ impl From<IPAddress> for RtIPAddr {
 		} as __u8;
 
 		let ip_mask = scan_fmt!(ipi.mask.as_str(), "{}", u8).unwrap();
-		let mut addr: Vec<u8> = Vec::new();
 
-		if ip_family == libc::AF_INET as __u8{
-			let (a0, a1, a2, a3) = scan_fmt!(ipi.address.as_str(),
-				"{}.{}.{}.{}", u8, u8, u8, u8).unwrap();
-			addr = vec![a0, a1, a2, a3];
-		} else {
-			let (a0, a1, a2, a3, a4, a5, a6, a7) = scan_fmt!(
-				 ipi.address.as_str(), "{}:{}:{}:{}:{}:{}:{}:{}",
-				 u16, u16, u16, u16, u16, u16, u16, u16).unwrap();
-			addr = unsafe {
-				Vec::from_raw_parts(vec![a0, a1, a2, a3, a4, a5, a6, a7].as_mut_ptr() as *mut u8, 16, 16)
-			}
-		}
+		let addr = if ip_family == libc::AF_INET as __u8 {
+				parse_ipv4(ipi.address.as_str()).unwrap()
+			} else {
+				let (a0, a1, a2, a3, a4, a5, a6, a7) = scan_fmt!(
+					 ipi.address.as_str(), "{}:{}:{}:{}:{}:{}:{}:{}",
+				 	u16, u16, u16, u16, u16, u16, u16, u16).unwrap();
+				unsafe {
+					Vec::from_raw_parts(vec![a0, a1, a2, a3, a4, a5, a6, a7].as_mut_ptr() as *mut u8, 16, 16)
+				}
+			};
 
 		Self { ip_family, ip_mask, addr, }
 	}
