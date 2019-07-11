@@ -1182,6 +1182,12 @@ fn read_stream(fd: RawFd, cid: &str, eid: &str, l: usize) -> Result<Vec<u8>> {
 	match unistd::read(fd, v.as_mut_slice()) {
 		Ok(len) => {
 			v.resize(len, 0);
+			// Rust didn't return an EOF error when the reading peer point
+			// was closed, instead it would return a 0 reading length, please
+			// see https://github.com/rust-lang/rfcs/blob/master/text/0517-io-os-reform.md#errors
+			if len  == 0 {
+				return Err(ErrorKind::ErrorCode("read  meet eof".to_string()).into());
+			}
 		}
 		Err(e) => {
 			match e {
