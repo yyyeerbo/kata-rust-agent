@@ -736,7 +736,9 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				write_json(pwfd, &SyncPC { pid: 0 })?;
 				info!("resume child!");
 				// wait for child to exit
-				let _ = wait::waitpid(Some(child), None)?;
+                // Since the child would be reaped by our reaper, so
+                // here ignore the wait result.
+                wait::waitpid(Some(child), None);
 			}
 			// read out child pid here. we don't use
 			// cgroup to get it
