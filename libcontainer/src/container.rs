@@ -467,9 +467,7 @@ where T: CgroupManager
 				}
 				Err(e) => return Err(ErrorKind::Nix(e).into()),
 			}
-
-			fcntl::fcntl(p.term_master.unwrap(),
-					FcntlArg::F_SETFL(OFlag::O_NONBLOCK))?;
+            
 			unistd::close(p.parent_console_socket.unwrap())?;
 			unistd::close(p.console_socket.unwrap())?;
 
