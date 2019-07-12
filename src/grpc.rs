@@ -1297,7 +1297,12 @@ fn find_process<'a>(sandbox: &'a mut Sandbox, cid: &'a str, eid: &'a str, init: 
 }
 
 pub fn start<S: Into<String>>(sandbox: Arc<Mutex<Sandbox>>, host: S, port: u16) -> Server {
-    let env = Arc::new(EnvBuilder::new().build());
+    let env = Arc::new(EnvBuilder::new()
+	.cq_count(1)
+        .wait_thread_count_default(5)
+        .wait_thread_count_min(1)
+        .wait_thread_count_max(10)
+	.build());
     let worker = agentService {
         sandbox: sandbox,
         test: 1,
