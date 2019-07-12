@@ -338,7 +338,7 @@ where T: CgroupManager
 		let linux = spec.Linux.as_ref().unwrap();
 		// get namespace vector to join/new
 		let nses = get_namespaces(&linux, p.init, self.init_process_pid)?;
-		info!("got namespaces!\n");
+		info!("got namespaces {:?}!\n", nses);
 		let mut to_new = CloneFlags::empty();
 		let mut to_join = Vec::new();
 		let mut pidns = false;
@@ -467,7 +467,7 @@ where T: CgroupManager
 				}
 				Err(e) => return Err(ErrorKind::Nix(e).into()),
 			}
-            
+
 			unistd::close(p.parent_console_socket.unwrap())?;
 			unistd::close(p.console_socket.unwrap())?;
 
@@ -479,7 +479,7 @@ where T: CgroupManager
 			self.processes.insert(p.pid, p);
 
 			return Ok(());
-		}
+		} // end parent
 
 		// setup stdio in child process
 		// need fd to send master fd to parent... store the fd in
@@ -639,12 +639,21 @@ fn get_namespaces(linux: &Linux, init: bool, init_pid: pid_t) -> Result<Vec<Linu
 		}
 	} else {
 		for i in NAMESPACES.keys() {
-			ns.push(LinuxNamespace { Type: i.to_string(),
-				Path: format!("/proc/{}/ns/{}",
-					init_pid, TYPETONAME.get(i).unwrap()),
-				unknown_fields: UnknownFields::default(),
-				cached_size: CachedSize::default(),
-				});
+            let ns_path = format!("/proc/{}/ns/{}", init_pid, TYPETONAME.get(i).unwrap());
+            let ns_path_buf = Path::new(&ns_path).read_link()?;
+
+            let init_ns_path = format!("/proc/{}/ns/{}", unistd::getpid(), TYPETONAME.get(i).unwrap());
+            let init_ns_path_buf = Path::new(&init_ns_path).read_link()?;
+
+            // ignore the namespace which is the same with system init namespace,
+            // since it shouldn't be join.
+            if !ns_path_buf.eq(&init_ns_path_buf) {
+                ns.push(LinuxNamespace { Type: i.to_string(),
+                    Path: ns_path,
+                    unknown_fields: UnknownFields::default(),
+                    cached_size: CachedSize::default(),
+                });
+            }
 		}
 	}
 	Ok(ns)
@@ -695,6 +704,8 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			// let mut pfile = unsafe { File::from_raw_fd(pfd) };
 			unistd::close(cfd)?;
 			unistd::close(crfd)?;
+
+            //wait child setup user namespace
 			let _ = read_json(pfd)?;
 
 			if userns {
