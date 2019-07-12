@@ -30,6 +30,7 @@ use crate::mount::{add_storages, STORAGEHANDLERLIST};
 use crate::sandbox::Sandbox;
 use crate::version::{AGENT_VERSION, API_VERSION};
 use crate::namespace::{NSTYPEIPC, NSTYPEUTS};
+use crate::netlink::RtnlHandle;
 
 use std::fs;
 use libc::{self, pid_t, TIOCSWINSZ, winsize, c_ushort};
@@ -843,9 +844,20 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::UpdateInterfaceRequest,
         sink: ::grpcio::UnarySink<protocols::types::Interface>,
     ) {
-        let interface = protocols::types::Interface::new();
+        let interface = req.interface.clone();
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		if sandbox.rtnl.is_none() {
+			sandbox.rtnl = Some(RtnlHandle::new().unwrap());
+		}
+
+		let rtnl = sandbox.rtnl.as_mut().unwrap();
+
+		let iface = rtnl.update_interface(interface.as_ref().unwrap()).unwrap();
+
         let f = sink
-            .success(interface)
+            .success(iface)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
@@ -855,7 +867,21 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::UpdateRoutesRequest,
         sink: ::grpcio::UnarySink<protocols::agent::Routes>,
     ) {
-        let routes = protocols::agent::Routes::new();
+        let mut routes = protocols::agent::Routes::new();
+		let rs = req.routes.clone().unwrap().Routes.into_vec();
+
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		if sandbox.rtnl.is_none() {
+			sandbox.rtnl = Some(RtnlHandle::new().unwrap());
+		}
+
+		let rtnl = sandbox.rtnl.as_mut().unwrap();
+		let v = rtnl.update_routes(rs.as_ref()).unwrap();
+
+		routes.set_Routes(RepeatedField::from_vec(v));
+
         let f = sink
             .success(routes)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
@@ -867,7 +893,19 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ListInterfacesRequest,
         sink: ::grpcio::UnarySink<protocols::agent::Interfaces>,
     ) {
-        let interface = protocols::agent::Interfaces::new();
+        let mut interface = protocols::agent::Interfaces::new();
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		if sandbox.rtnl.is_none() {
+			sandbox.rtnl = Some(RtnlHandle::new().unwrap());
+		}
+
+		let rtnl = sandbox.rtnl.as_mut().unwrap();
+		let v = rtnl.list_interfaces().unwrap();
+
+		interface.set_Interfaces(RepeatedField::from_vec(v));
+		info!("got interfaces!");
         let f = sink
             .success(interface)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
@@ -879,7 +917,22 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::ListRoutesRequest,
         sink: ::grpcio::UnarySink<protocols::agent::Routes>,
     ) {
-        let routes = protocols::agent::Routes::new();
+        let mut routes = protocols::agent::Routes::new();
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		if sandbox.rtnl.is_none() {
+			sandbox.rtnl = Some(RtnlHandle::new().unwrap());
+		}
+
+		info!("lits routes!");
+
+		let rtnl = sandbox.rtnl.as_mut().unwrap();
+
+		let v = rtnl.list_routes().unwrap();
+
+		routes.set_Routes(RepeatedField::from_vec(v));
+
         let f = sink
             .success(routes)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));

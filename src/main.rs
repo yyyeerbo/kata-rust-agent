@@ -48,7 +48,7 @@ const VSOCK_PORT: u16 = 1024;
 
 fn main() {
     simple_logging::log_to_stderr(LevelFilter::Trace);
-    env::set_var("RUST_BACKTRACE", "1");
+    env::set_var("RUST_BACKTRACE", "full");
 
     // Initialize unique sandbox structure.
     let sandbox = Arc::new(Mutex::new(Sandbox::new()));
@@ -60,6 +60,8 @@ fn main() {
 
     //vsock:///dev/vsock, port
     let mut server = grpc::start(sandbox.clone(), VSOCK_ADDR, VSOCK_PORT);
+
+//    let mut server = grpc::start(sandbox.clone(), "unix:///tmp/testagent", 1);
 
     let handle = thread::spawn(move || {
         // info!("Press ENTER to exit...");
