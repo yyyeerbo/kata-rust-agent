@@ -26,7 +26,7 @@ pub struct Sandbox {
     pub running: bool,
     pub no_pivot_root: bool,
     enable_grpc_trace: bool,
-    sandbox_pid_ns: bool,
+    pub sandbox_pid_ns: bool,
 	pub sender: Option<Sender<i32>>,
 	pub rtnl: Option<RtnlHandle>,
 }

@@ -29,8 +29,8 @@ use libcontainer::process::ProcessOperations;
 use crate::mount::{add_storages, STORAGEHANDLERLIST};
 use crate::sandbox::Sandbox;
 use crate::version::{AGENT_VERSION, API_VERSION};
-use crate::namespace::{NSTYPEIPC, NSTYPEUTS};
 use crate::netlink::RtnlHandle;
+use crate::namespace::{NSTYPEIPC, NSTYPEUTS, NSTYPEPID};
 
 use std::fs;
 use libc::{self, pid_t, TIOCSWINSZ, winsize, c_ushort};
@@ -1337,16 +1337,29 @@ fn update_container_namespaces(sandbox: &Sandbox, spec: &mut Spec) -> Result<()>
         Some(l) => l
     };
 
+	let mut pidNs = false;
+
     let mut namespaces = linux.Namespaces.as_mut_slice();
     for namespace in namespaces.iter_mut() {
+		if namespace.Type == NSTYPEPID {
+			pidNs = true;
+			continue
+		}
         if namespace.Type == NSTYPEIPC {
             namespace.Path = sandbox.shared_ipcns.path.clone();
+			continue
         }
-
         if namespace.Type == NSTYPEUTS {
             namespace.Path = sandbox.shared_utsns.path.clone();
+			continue
         }
     };
+
+	if !pidNs && !sandbox.sandbox_pid_ns {
+		let mut pid_ns = LinuxNamespace::new();
+		pid_ns.set_Type(NSTYPEPID.to_string());
+		linux.Namespaces.push(pid_ns);
+	}
 
     Ok(())
 }

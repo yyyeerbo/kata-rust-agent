@@ -15,13 +15,12 @@ use crate::mount::{BareMount, FLAGS};
 const PERSISTENT_NS_DIR: &'static str = "/var/run/sandbox-ns";
 pub const NSTYPEIPC: &'static str = "ipc";
 pub const NSTYPEUTS: &'static str = "uts";
-pub const NSTYPENET: &'static str = "net";
+pub const NSTYPEPID: &'static str = "pid";
 
 lazy_static! {
     static ref CLONE_FLAG_TABLE: HashMap<&'static str, CloneFlags> = {
         let mut m = HashMap::new();
         m.insert(NSTYPEIPC, CloneFlags::CLONE_NEWIPC);
-        m.insert(NSTYPENET, CloneFlags::CLONE_NEWNET);
         m.insert(NSTYPEUTS, CloneFlags::CLONE_NEWUTS);
         m
     };
