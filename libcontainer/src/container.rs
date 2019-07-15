@@ -14,6 +14,8 @@ use std::sync::mpsc::channel;
 use std::sync::Mutex;
 use std::path::Path;
 use std::fs;
+use std::mem;
+use std::mem::transmute;
 use std::os::unix::io::RawFd;
 use std::ffi::CString;
 use crate::sync::Cond;
@@ -491,11 +493,12 @@ where T: CgroupManager
 			unistd::chdir(p.cwd.as_str())?;
 		}
 
-		// notify parent to run poststart hooks
-		// cfd is closed when return from join_namespaces
-		// should retunr cfile instead of cfd?
-		write_json(cfd, &SyncPC { pid: 0 })?;
-
+		if p.init {
+			// notify parent to run poststart hooks
+			// cfd is closed when return from join_namespaces
+			// should retunr cfile instead of cfd?
+			write_json(cfd, &SyncPC { pid: 0 })?;
+		}
 		// close all useless fds
 
 		for fd in &p.to_close {
@@ -660,31 +663,74 @@ fn get_namespaces(linux: &Linux, init: bool, init_pid: pid_t) -> Result<Vec<Linu
 }
 
 const BUFLEN: usize = 40;
-
 fn read_json(fd: RawFd) -> Result<String>
 {
 	let mut json: Vec<u8> = vec![0; BUFLEN];
+	let mut start  =  0;
+	let mut len = 0;
+	info!("read from {}\n", fd);
+	let mut ret = Ok("".to_string());
 
-	info!("read from {}", fd);
+	loop {
+		match unistd::read(fd, &mut json[start..]) {
+			Ok(n) => {
+				start += n;
+				if len  == 0 {
+					len = json[0] as usize;
+				}
+				debug!("read len={}, n={} start={}\n", len, n, start);
+				if start == len {
+					json.resize(len, 0);
+					if start >= 1 {
+						ret = Ok(String::from_utf8(json[1..].to_vec())?);
+					}
+					break;
+				}
+			}
+			Err(e) => {
+				if !e.eq(&Error::from(Errno::EINTR)) {
+					ret = Err(e)?;
+					break;
+				}
+			}
+		}
+	}
 
-	let n = unistd::read(fd, json.as_mut_slice())?;
-
-	info!("vector length: {}, read {}", json.len(), n);
-	json.resize(n, 0);
-
-	Ok(String::from_utf8(json)?)
+	ret
 }
 
 fn write_json(fd: RawFd, msg: &SyncPC) -> Result<()>
 {
-	let buf = serde_json::to_string(&msg).unwrap();
+	let buf_s = serde_json::to_string(&msg).unwrap();
+	// json length should be less than 255
+	let buf = buf_s.as_bytes();
+	let len: u8 = buf.len() as u8 + 1;
 
-	info!("write to {}", fd);
-	let n = unistd::write(fd, buf.as_bytes())?;
+	let mut bytes: Vec<u8> = vec![];
+	let mut start = 0;
+	let mut byte: [u8; 1] = unsafe { transmute(len.to_be()) };
+	bytes.extend_from_slice(&byte);
+	bytes.extend_from_slice(buf);
 
-	if n == 0 {
-		info!("write out 0 byte!");
+	let bytes_len = bytes.len();
+
+	let bytes_buf = bytes.as_slice();
+
+	info!("write to {} with {:?}", fd, msg);
+	loop {
+		match unistd::write(fd, &bytes_buf[start..]) {
+			Ok(n)  => { start += n;
+				if start == bytes_len {
+					break;
+				}
+			},
+			Err(e) =>  {
+				return  Err(Error::from(e))?;
+			}
+		}
 	}
+
+	info!("write out {} byte!", start);
 
 	Ok(())
 }
@@ -752,11 +798,16 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			// read out child pid here. we don't use
 			// cgroup to get it
 			// and the wait for child exit to get grandchild
-			
-			info!("wait for hook!");
-			let _ = read_json(pfd)?;
+
 			if init {
+				info!("wait for hook!");
+				let _ = read_json(pfd)?;
 				// run prestart hook
+
+				// notify child run prestart hooks completed
+				write_json(pwfd, &SyncPC { pid: 0 })?;
+
+				// wait to run poststart hook
 				let _ = read_json(pfd)?;
 				//run poststart hook
 			}
@@ -834,9 +885,19 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 		bind_device = true;
 	}
 
+	// create a pipe for sync between parent and child.
+	// here we should make sure the parent return pid before
+	// the child notify grand parent to run hooks, otherwise
+	// both of the parent and his child would write cfd at the same
+	// time which would mesh the grand parent to read.
+	let (chfd, phfd) = unistd::pipe2(OFlag::O_CLOEXEC).chain_err(
+		|| "failed to create pipe for syncing run hooks")?;
+
 	if pidns {
 		match unistd::fork()? {
 			ForkResult::Parent { child } => {
+
+				unistd::close(chfd);
 				// set child pid to topmost parent and the exit
 				write_json(cfd, &SyncPC {
 					pid: child.as_raw() })?;
@@ -846,15 +907,18 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				// wait for parent read it and the continue
 				info!("after send out child pid!");
 				let _ = read_json(crfd)?;
+
+				// notify child to continue.
+				write_json(phfd, &SyncPC {
+					pid: 0 })?;
 				std::process::exit(0);
 			}
 			ForkResult::Child => {
 				*parent = 2;
+				unistd::close(phfd);
 			}
 		}
 	}
-
-	unistd::close(crfd)?;
 
 	if to_new.contains(CloneFlags::CLONE_NEWUTS) {
 		unistd::sethostname(&spec.Hostname)?;
@@ -870,10 +934,20 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 		mount::init_rootfs(&spec, bind_device)?;
 	}
 
-	// notify parent to run prestart hooks
-	if init {
-		write_json(cfd, &SyncPC { pid: 0 })?;
+	// wait until parent notified
+	if pidns {
+		let _ = read_json(chfd)?;
 	}
+	unistd::close(chfd);
+
+	if init {
+		// notify parent to run prestart hooks
+		write_json(cfd, &SyncPC { pid: 0 })?;
+		// wait parent run prestart hooks
+		let _ = read_json(crfd)?;
+	}
+
+	unistd::close(crfd)?;
 
 	if mount_fd != -1 {
 		sched::setns(mount_fd, CloneFlags::CLONE_NEWNS)?;
