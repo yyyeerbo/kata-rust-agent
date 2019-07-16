@@ -708,7 +708,7 @@ fn write_json(fd: RawFd, msg: &SyncPC) -> Result<()>
 
 	let mut bytes: Vec<u8> = vec![];
 	let mut start = 0;
-	let mut byte: [u8; 1] = unsafe { transmute(len.to_be()) };
+	let mut byte: [u8; 1] = [len; 1];
 	bytes.extend_from_slice(&byte);
 	bytes.extend_from_slice(buf);
 
