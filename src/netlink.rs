@@ -1501,6 +1501,17 @@ impl RtnlHandle {
 			for link in &lv {
 				let nlh: *const nlmsghdr = *link;
 				let ifi: *const ifinfomsg = NLMSG_DATA!(nlh) as *const ifinfomsg;
+
+				if (*nlh).nlmsg_type != RTM_NEWLINK 
+					&& (*nlh).nlmsg_type != RTM_DELLINK {
+						continue;
+				}
+
+				if (*nlh).nlmsg_len < NLMSG_SPACE!(mem::size_of::<ifinfomsg>()) {
+					info!("invalid nlmsg! nlmsg_len: {}, nlmsg_space: {}", (*nlh).nlmsg_len, NLMSG_SPACE!(mem::size_of::<ifinfomsg>()));
+					break;
+				}
+
 				let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
 				let mut rtalen = IFLA_PAYLOAD!(nlh) as u32;
 
@@ -1698,6 +1709,16 @@ impl RtnlHandle {
 			for a in &av {
 				let nlh: *const nlmsghdr = *a;
 				let ifa: *const ifaddrmsg = NLMSG_DATA!(nlh) as *const ifaddrmsg;
+
+				if (*nlh).nlmsg_type != RTM_NEWADDR {
+					continue;
+				}
+
+				let tlen = NLMSG_SPACE!(mem::size_of::<ifaddrmsg>());
+				if (*nlh).nlmsg_len < tlen {
+					info!("invalid nlmsg! nlmsg_len: {}, nlmsg_space: {}", (*nlh).nlmsg_len, tlen);
+					break;
+				}
 
 				if (*ifa).ifa_flags as u32 & IFA_F_SECONDARY != 0 {
 					continue;
