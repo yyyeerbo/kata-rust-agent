@@ -792,8 +792,8 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				info!("resume child!");
 				// wait for child to exit
                 // Since the child would be reaped by our reaper, so
-                // here ignore the wait result.
-                wait::waitpid(Some(child), None);
+                // there is no need reap the child here.
+                // wait::waitpid(Some(child), None);
 			}
 			// read out child pid here. we don't use
 			// cgroup to get it
