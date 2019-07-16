@@ -860,6 +860,7 @@ impl protocols::agent_grpc::AgentService for agentService {
             .success(iface)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
+
     }
     fn update_routes(
         &mut self,
@@ -885,6 +886,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let f = sink
             .success(routes)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+
         ctx.spawn(f)
     }
     fn list_interfaces(
@@ -905,7 +907,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let v = rtnl.list_interfaces().unwrap();
 
 		interface.set_Interfaces(RepeatedField::from_vec(v));
-		info!("got interfaces!");
+
         let f = sink
             .success(interface)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
@@ -924,8 +926,6 @@ impl protocols::agent_grpc::AgentService for agentService {
 		if sandbox.rtnl.is_none() {
 			sandbox.rtnl = Some(RtnlHandle::new().unwrap());
 		}
-
-		info!("lits routes!");
 
 		let rtnl = sandbox.rtnl.as_mut().unwrap();
 

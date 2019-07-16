@@ -14,6 +14,7 @@ error_chain! {
 		UTF8(std::string::FromUtf8Error);
 		Parse(std::num::ParseIntError);
 		Scanfmt(scan_fmt::parse::ScanError);
+		Ip(std::net::AddrParseError);
 	}
 	// define new errors
 	errors {
