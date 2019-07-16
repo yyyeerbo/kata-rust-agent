@@ -725,7 +725,9 @@ fn write_json(fd: RawFd, msg: &SyncPC) -> Result<()>
 				}
 			},
 			Err(e) =>  {
-				return  Err(Error::from(e))?;
+				if !e.eq(&Error::from(Errno::EINTR)) {
+					return Err(Error::from(e))?;
+				}
 			}
 		}
 	}
