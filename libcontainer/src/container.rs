@@ -489,7 +489,7 @@ where T: CgroupManager
 		setup_stdio(&p)?;
 
 		if !p.cwd.is_empty() {
-			info!("cwd: {}", p.cwd.as_str());
+			debug!("cwd: {}", p.cwd.as_str());
 			unistd::chdir(p.cwd.as_str())?;
 		}
 
@@ -514,7 +514,7 @@ where T: CgroupManager
 		// For exec process, only need to join existing namespaces,
 		// the namespaces are got from init process or from
 		// saved spec.
-		info!("before setup execfifo!");
+		debug!("before setup execfifo!");
 		if p.init {
 			let fd = fcntl::open(
 				format!("/proc/self/fd/{}", fifofd).as_str(),
@@ -611,7 +611,7 @@ fn do_exec(path: &str, args: &[String], env: &[String]) -> Result<()> {
         .collect();
 		*/
     // execvp doesn't use env for the search path, so we set env manually
-	info!("exec process right now!");
+	debug!("exec process right now!");
     if let Err(e) = unistd::execvp(&p, &a) {
 		info!("execve failed!!!");
 		info!("binary: {:?}, args: {:?}, envs: {:?}", p, a, env);

@@ -47,7 +47,7 @@ const VSOCK_ADDR: &'static str = "vsock://-1";
 const VSOCK_PORT: u16 = 1024;
 
 fn main() {
-    simple_logging::log_to_stderr(LevelFilter::Trace);
+    simple_logging::log_to_stderr(LevelFilter::Info);
     env::set_var("RUST_BACKTRACE", "full");
 
     // Initialize unique sandbox structure.
