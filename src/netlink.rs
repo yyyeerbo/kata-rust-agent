@@ -1825,7 +1825,7 @@ impl RtnlHandle {
 			(*ifi).ifi_type = ifinfo.ifi_type;
 			(*ifi).ifi_index = ifinfo.ifi_index;
 
-			if iface.raw_flags | libc::IFF_NOARP as u32 != 0 {
+			if iface.raw_flags & libc::IFF_NOARP as u32 != 0 {
 				(*ifi).ifi_change |= libc::IFF_NOARP as u32;
 				(*ifi).ifi_flags |= libc::IFF_NOARP as u32;
 			}
