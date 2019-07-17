@@ -41,6 +41,9 @@ use std::thread;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
 const SYSFS_MEMORY_BLOCK_SIZE_PATH: &'static str = "/sys/devices/system/memory/block_size_bytes";
 const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memory/probe";
 const CONTAINER_BASE: &'static str = "/run/agent";
@@ -334,7 +337,16 @@ impl protocols::agent_grpc::AgentService for agentService {
 			}
 		};
 
-		let _ = p.signal(Signal::from_c_int(req.signal as i32).unwrap());
+		let mut signal = Signal::from_c_int(req.signal as i32).unwrap();
+
+		// For container initProcess, if it hasn't installed handler for "SIGTERM" signal,
+		// it will ignore the "SIGTERM" signal sent to it, thus send it "SIGKILL" signal
+		// instead of "SIGTERM" to terminate it.
+		if p.init && signal == Signal::SIGTERM && !is_signal_handled(p.pid, req.signal) {
+			signal = Signal::SIGKILL;
+		}
+
+		let _ = p.signal(signal);
 
 		let resp = Empty::new();
 		let f = sink.success(resp)
@@ -1367,4 +1379,51 @@ fn update_container_namespaces(sandbox: &Sandbox, spec: &mut Spec) -> Result<()>
 	}
 
     Ok(())
+}
+
+// Check is the container process installed the
+// handler for specific signal.
+fn is_signal_handled(pid: pid_t, signum: u32) -> bool {
+	let sig_mask: u64 = 1u64 << (signum - 1);
+	let file_name = format!("/proc/{}/status", pid);
+
+	// Open the file in read-only mode (ignoring errors).
+	let file = match File::open(&file_name) {
+		Ok(f) => f,
+		Err(e) => {
+			warn!("failed to open file {}\n", file_name);
+			return false;
+		}
+	};
+
+	let reader = BufReader::new(file);
+
+	// Read the file line by line using the lines() iterator from std::io::BufRead.
+	for (index, line) in reader.lines().enumerate() {
+		let line = match line {
+			Ok(l) => l,
+			Err(e) => {
+				warn!("failed to read file {}\n", file_name);
+				return false;
+			}
+		};
+		if line.starts_with("SigCgt:") {
+			let mask_vec: Vec<&str> = line.split(":").collect();
+			if mask_vec.len() != 2 {
+				warn!("parse the SigCgt field failed\n");
+				return false;
+			}
+			let sig_cgt_str = mask_vec[1];
+			let sig_cgt_mask = match u64::from_str_radix(sig_cgt_str, 16) {
+				Ok(h) => h,
+				Err(e) => {
+					warn!("failed to parse the str {} to hex\n", sig_cgt_str);
+					return false;
+				}
+			};
+
+			return (sig_cgt_mask & sig_mask) == sig_mask;
+		}
+	}
+	false
 }
