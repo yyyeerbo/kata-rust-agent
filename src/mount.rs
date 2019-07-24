@@ -299,6 +299,7 @@ pub fn add_storages(
         };
 
         let mount_point = match handler(&storage, sandbox) {
+            // Todo need to rollback the mounted storage if err met.
             Err(e) => return Err(e),
             Ok(m) => m,
         };

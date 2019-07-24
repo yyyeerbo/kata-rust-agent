@@ -36,6 +36,7 @@ mod network;
 mod sandbox;
 mod version;
 mod uevent;
+mod device;
 pub mod netlink;
 
 use namespace::Namespace;

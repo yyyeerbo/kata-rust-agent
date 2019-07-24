@@ -31,6 +31,7 @@ use crate::sandbox::Sandbox;
 use crate::version::{AGENT_VERSION, API_VERSION};
 use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
 use crate::namespace::{NSTYPEIPC, NSTYPEUTS, NSTYPEPID};
+use crate::device::rescan_pci_bus;
 
 use std::fs;
 use libc::{self, pid_t, TIOCSWINSZ, winsize, c_ushort};
@@ -72,6 +73,22 @@ impl protocols::agent_grpc::AgentService for agentService {
         let mut s = sandbox.lock().unwrap();
 
         info!("receive createcontainer {}\n", &cid);
+
+		// re-scan PCI bus
+		// looking for hidden devices
+		match rescan_pci_bus() {
+			Ok(_) => (),
+			Err(e) => {
+				let f = sink
+					.fail(RpcStatus::new(
+						RpcStatusCode::Internal,
+						Some("Could not rescan PCI bus".to_string()),
+					))
+					.map_err(move |e| error!("fail to reply {:?}", req));
+				ctx.spawn(f);
+				return;
+			}
+		};
 
         update_container_namespaces(&s, oci);
 
