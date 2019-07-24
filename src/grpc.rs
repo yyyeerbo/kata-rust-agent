@@ -29,7 +29,7 @@ use libcontainer::process::ProcessOperations;
 use crate::mount::{add_storages, STORAGEHANDLERLIST};
 use crate::sandbox::Sandbox;
 use crate::version::{AGENT_VERSION, API_VERSION};
-use crate::netlink::RtnlHandle;
+use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
 use crate::namespace::{NSTYPEIPC, NSTYPEUTS, NSTYPEPID};
 
 use std::fs;
@@ -861,7 +861,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let mut sandbox = s.lock().unwrap();
 
 		if sandbox.rtnl.is_none() {
-			sandbox.rtnl = Some(RtnlHandle::new().unwrap());
+			sandbox.rtnl = Some(RtnlHandle::new(NETLINK_ROUTE, 0).unwrap());
 		}
 
 		let rtnl = sandbox.rtnl.as_mut().unwrap();
@@ -887,7 +887,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let mut sandbox = s.lock().unwrap();
 
 		if sandbox.rtnl.is_none() {
-			sandbox.rtnl = Some(RtnlHandle::new().unwrap());
+			sandbox.rtnl = Some(RtnlHandle::new(NETLINK_ROUTE, 0).unwrap());
 		}
 
 		let rtnl = sandbox.rtnl.as_mut().unwrap();
@@ -912,7 +912,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let mut sandbox = s.lock().unwrap();
 
 		if sandbox.rtnl.is_none() {
-			sandbox.rtnl = Some(RtnlHandle::new().unwrap());
+			sandbox.rtnl = Some(RtnlHandle::new(NETLINK_ROUTE, 0).unwrap());
 		}
 
 		let rtnl = sandbox.rtnl.as_mut().unwrap();
@@ -936,7 +936,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let mut sandbox = s.lock().unwrap();
 
 		if sandbox.rtnl.is_none() {
-			sandbox.rtnl = Some(RtnlHandle::new().unwrap());
+			sandbox.rtnl = Some(RtnlHandle::new(NETLINK_ROUTE, 0).unwrap());
 		}
 
 		let rtnl = sandbox.rtnl.as_mut().unwrap();

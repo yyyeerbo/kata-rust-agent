@@ -1050,7 +1050,7 @@ impl Default for nlmsgerr {
 
 // #[derive(Copy)]
 pub struct RtnlHandle {
-	fd: libc::c_int,
+	pub fd: libc::c_int,
 	local: libc::sockaddr_nl,
 	seq: __u32,
 	dump: __u32,
@@ -1076,14 +1076,15 @@ impl fmt::Debug for RtnlHandle {
 
 pub const NETLINK_ROUTE: libc::c_int = 0;
 pub const NETLINK_EXT_ACK: libc::c_int = 11;
+pub const NETLINK_UEVENT: libc::c_int = 15;
 
 impl RtnlHandle {
-	pub fn new() -> Result<Self> {
+	pub fn new(protocal: libc::c_int, group: u32) -> Result<Self> {
 		// open netlink_route socket
 		let mut sa: libc::sockaddr_nl = unsafe { mem::zeroed::<libc::sockaddr_nl>() };
 		let fd = unsafe {
 			let tmpfd = libc::socket(libc::AF_NETLINK,
-				libc::SOCK_DGRAM, NETLINK_ROUTE);
+				libc::SOCK_DGRAM, protocal);
 
 			let sndbuf: libc::c_int = 32768;
 			let rcvbuf: libc::c_int = 1024 * 1024;
@@ -1122,6 +1123,7 @@ impl RtnlHandle {
 				mem::size_of::<libc::c_int>() as libc::socklen_t);
 
 			sa.nl_family = libc::AF_NETLINK as __u16;
+			sa.nl_groups = group;
  
 			err = libc::bind(tmpfd,
 					(&sa as *const libc::sockaddr_nl) as *const libc::sockaddr,
@@ -1189,7 +1191,7 @@ impl RtnlHandle {
 		Ok(())
 	}
 
-	fn recv_message(&self) -> Result<Vec<u8>> {
+	pub fn recv_message(&self) -> Result<Vec<u8>> {
 		let mut sa: libc::sockaddr_nl = unsafe {
 			mem::zeroed::<libc::sockaddr_nl>()
 		};
@@ -2612,7 +2614,7 @@ impl From<Route> for RtRoute {
 
 		let rt: RtRoute = RtRoute::default();
 		let index = {
-			let mut rh = RtnlHandle::new()
+			let mut rh = RtnlHandle::new(NETLINK_ROUTE, 0)
 					.unwrap();
 			rh.find_link_by_name(r.device.as_str())
 			.unwrap()

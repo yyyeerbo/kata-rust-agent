@@ -10,7 +10,7 @@ use std::sync::mpsc::{Sender, Receiver};
 use libcontainer::errors;
 use libcontainer::container::BaseContainer;
 use libc::pid_t;
-use crate::netlink::RtnlHandle;
+use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
 
 #[derive(Debug, Default)]
 pub struct Sandbox {
@@ -52,7 +52,7 @@ impl Sandbox{
             enable_grpc_trace: false,
             sandbox_pid_ns: false,
 			sender: None,
-			rtnl: Some(RtnlHandle::new().unwrap()),
+			rtnl: Some(RtnlHandle::new(NETLINK_ROUTE, 0).unwrap()),
         }
     }
 

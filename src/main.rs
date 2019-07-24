@@ -35,11 +35,13 @@ mod namespace;
 mod network;
 mod sandbox;
 mod version;
+mod uevent;
 pub mod netlink;
 
 use namespace::Namespace;
 use network::Network;
 use sandbox::Sandbox;
+use uevent::watch_uevents;
 
 mod grpc;
 
@@ -54,6 +56,7 @@ fn main() {
     let sandbox = Arc::new(Mutex::new(Sandbox::new()));
 
     setup_signal_handler(sandbox.clone()).unwrap();
+    watch_uevents();
 
     let (tx, rx) = mpsc::channel::<i32>();
 	sandbox.lock().unwrap().sender = Some(tx);
