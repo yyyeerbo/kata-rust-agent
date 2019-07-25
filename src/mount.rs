@@ -1,10 +1,10 @@
+use libcontainer::cgroups::fs::Manager as FsManager;
+use libcontainer::cgroups::Manager as CgroupManager;
 use std::collections::HashMap;
 use std::ffi::{CString, OsStr};
 use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use libcontainer::cgroups::Manager as CgroupManager;
-use libcontainer::cgroups::fs::Manager as FsManager;
 
 use std::path::Path;
 use std::ptr::null;
@@ -222,26 +222,29 @@ fn common_storage_handler(storage: &Storage) -> Result<String, String> {
 
 // mount_storage performs the mount described by the storage structure.
 fn mount_storage(storage: &Storage) -> Result<(), String> {
-     match storage.fstype.as_str() {
+    match storage.fstype.as_str() {
         DRIVER9PTYPE | DRIVERVIRTIOFSTYPE => {
             let dest_path = Path::new(storage.mount_point.as_str());
-            if ! dest_path.exists() {
-                fs::create_dir_all(dest_path).map_err(|err| format!("Create mount destination failed with {:?}", err));
+            if !dest_path.exists() {
+                fs::create_dir_all(dest_path)
+                    .map_err(|err| format!("Create mount destination failed with {:?}", err));
             }
         }
-        _ => ()
+        _ => (),
     }
 
     let options_vec = storage.options.to_vec();
     let (flags, options) = parse_mount_flags_and_options(options_vec);
-    
-     info!("mount storage as: mount-source: {},
+
+    info!(
+        "mount storage as: mount-source: {},
                 mount-destination: {},
                 mount-fstype:      {},
-                mount-options:     {}", storage.source.as_str(),
-          storage.mount_point.as_str(),
-          storage.fstype.as_str(),
-          options.as_str()
+                mount-options:     {}",
+        storage.source.as_str(),
+        storage.mount_point.as_str(),
+        storage.fstype.as_str(),
+        options.as_str()
     );
 
     let bare_mount = BareMount::new(

@@ -46,6 +46,7 @@ use std::io::{BufRead, BufReader};
 
 const SYSFS_MEMORY_BLOCK_SIZE_PATH: &'static str = "/sys/devices/system/memory/block_size_bytes";
 const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memory/probe";
+pub const SYSFS_MEMORY_ONLINE_PATH: &'static str = "/sys/devices/system/memory";
 const CONTAINER_BASE: &'static str = "/run/agent";
 
 

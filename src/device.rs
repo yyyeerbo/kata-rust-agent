@@ -15,11 +15,11 @@ use crate::GLOBAL_DEVICE_WATCHER;
     target_arch = "powerpc64le",
     target_arch = "s390x"
 ))]
-const ROOT_BUS_PATH: &'static str = "/devices/pci0000:00";
+pub const ROOT_BUS_PATH: &'static str = "/devices/pci0000:00";
 #[cfg(target_arch = "arm")]
-const ROOT_BUS_PATH: &'static str = "/devices/platform/4010000000.pcie/pci0000:00";
+pub const ROOT_BUS_PATH: &'static str = "/devices/platform/4010000000.pcie/pci0000:00";
 
-const SYSFS_DIR: &'static str = "/sys";
+pub const SYSFS_DIR: &'static str = "/sys";
 
 const SYS_BUS_PREFIX: &'static str = "/sys/bus/pci/devices";
 const PCI_BUS_RESCAN_FILE: &'static str = "/sys/bus/pci/rescan";
@@ -38,8 +38,12 @@ const SCSI_DISK_SUFFIX: &'static str = "/device/block";
 const SCSI_HOST_PATH: &'static str = "/sys/class/scis_host";
 
 pub fn rescan_pci_bus() -> Result<()> {
+    online_device(PCI_BUS_RESCAN_FILE)
+}
+
+pub fn online_device(path: &str) -> Result<()> {
     let byte: [u8; 1] = [1; 1];
-    let mut f = File::create(PCI_BUS_RESCAN_FILE)?;
+    let mut f = File::create(path)?;
     f.write(&byte)?;
     Ok(())
 }

@@ -1,5 +1,11 @@
+use crate::device::ROOT_BUS_PATH;
+use crate::device::{online_device, SYSFS_DIR};
+use crate::grpc::SYSFS_MEMORY_ONLINE_PATH;
 use crate::netlink::{RtnlHandle, NETLINK_UEVENT};
-use std::{thread};
+use crate::sandbox::Sandbox;
+use crate::GLOBAL_DEVICE_WATCHER;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 pub const U_EVENT_ACTION: &'static str = "ACTION";
 pub const U_EVENT_DEV_PATH: &'static str = "DEVPATH";
@@ -33,16 +39,17 @@ fn parse_uevent(message: &str) -> Uevent {
                 U_EVENT_DEV_PATH => event.devpath = String::from(key_val[1]),
                 U_EVENT_SEQ_NUM => event.seqnum = String::from(key_val[1]),
                 U_EVENT_INTERFACE => event.interface = String::from(key_val[1]),
-                _  => error!("failed to match the event field"),
+                _ => error!("failed to match the event field"),
             }
         }
     }
 
-    info!("got uevent message: {:?}", event);
     event
 }
 
-pub fn watch_uevents() {
+pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
+    let s = sandbox.clone();
+
     thread::spawn(move || {
         let rtnl = RtnlHandle::new(NETLINK_UEVENT, 1).unwrap();
         loop {
@@ -51,10 +58,56 @@ pub fn watch_uevents() {
                 Ok(data) => {
                     let text = String::from_utf8(data);
                     match text {
+                        Err(_) => error!("failed to convert bytes to text.\n"),
                         Ok(text) => {
-                            parse_uevent(&text);
-                        },
-                        Err(_) => error!("failed to convert bytes to text")
+                            let event = parse_uevent(&text);
+                            info!("got uevent message: {:?}", event);
+
+                            // Check if device hotplug event results in a device node being created.
+                            if event.devname != "" && event.devpath.starts_with(ROOT_BUS_PATH) {
+                                let watcher = GLOBAL_DEVICE_WATCHER.clone();
+                                let mut w = watcher.lock().unwrap();
+
+                                let s = sandbox.clone();
+                                let mut sb = s.lock().unwrap();
+
+                                // Add the device node name to the pci device map.
+                                sb.pci_device_map
+                                    .insert(event.devpath.clone(), event.devname.clone());
+
+                                // Notify watchers that are interested in the udev event.
+                                // Close the channel after watcher has been notified.
+
+                                let devpath = event.devpath.clone();
+
+                                let empties: Vec<_> = w
+                                    .iter()
+                                    .filter(|(dev_pci_addr, _)| {
+                                        let p = format!("{}/{}", ROOT_BUS_PATH, *dev_pci_addr);
+                                        devpath.starts_with::<&str>(p.as_ref())
+                                    })
+                                    .map(|(k, sender)| {
+                                        let devname = event.devname.clone();
+                                        sender.send(devname);
+                                        k.clone()
+                                    })
+                                    .collect();
+
+                                for empty in empties {
+                                    w.remove(&empty);
+                                }
+                            } else {
+                                let online_path =
+                                    format!("{}/{}/online", SYSFS_DIR, &event.devpath);
+                                if online_path.starts_with(SYSFS_MEMORY_ONLINE_PATH) {
+                                    // Check memory hotplug and online if possible
+                                    match online_device(online_path.as_ref()) {
+                                        Ok(_) => (),
+                                        Err(e) => error!("failed online device {}", &event.devpath),
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
