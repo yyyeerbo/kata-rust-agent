@@ -1,7 +1,7 @@
 use futures::*;
 use grpcio::{EnvBuilder, Server, ServerBuilder};
 use grpcio::{RpcStatus, RpcStatusCode};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lazy_static;
 use libcontainer::cgroups::fs::Manager as FsManager;
@@ -17,7 +17,6 @@ use protobuf::{RepeatedField, SingularPtrField};
 use protocols::oci::{self, Spec, Linux, LinuxNamespace};
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 use nix::unistd::{self, Pid};
 use nix::sys::stat;

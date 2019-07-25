@@ -1,6 +1,13 @@
 use libcontainer::errors::*;
 use std::fs::{self, DirEntry, File};
 use std::io::Write;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use crate::mount::TIMEOUT_HOTPLUG;
+use crate::sandbox::Sandbox;
+use crate::GLOBAL_DEVICE_WATCHER;
 
 #[cfg(any(
     target_arch = "x86_64",
@@ -90,4 +97,58 @@ pub fn get_device_pci_address(pci_id: &str) -> Result<String> {
     );
 
     Ok(bridge_device_pci_addr)
+}
+
+pub fn get_pci_device_name(sandbox: Arc<Mutex<Sandbox>>, pci_id: &str) -> Result<String> {
+    let pci_addr = get_device_pci_address(pci_id)?;
+    let mut dev_name: String = String::default();
+    let (tx, rx) = mpsc::channel::<String>();
+
+    {
+        let watcher = GLOBAL_DEVICE_WATCHER.clone();
+        let mut w = watcher.lock().unwrap();
+
+        let s = sandbox.clone();
+        let mut sb = s.lock().unwrap();
+
+        for (key, value) in &(sb.pci_device_map) {
+            if key.contains(&pci_addr) {
+                dev_name = value.to_string();
+                info!("Device {} found in pci device map", &pci_addr);
+                break;
+            }
+        }
+
+        rescan_pci_bus()?;
+
+        // If device is not found in the device map, hotplug event has not
+        // been received yet, create and add channel to the watchers map.
+        // The key of the watchers map is the device we are interested in.
+        // Note this is done inside the lock, not to miss any events from the
+        // global udev listener.
+        if dev_name == "" {
+            w.insert(pci_addr.clone(), tx);
+        }
+    }
+
+    if dev_name == "" {
+        info!("Waiting on channel for device notification\n");
+
+        match rx.recv_timeout(Duration::from_secs(TIMEOUT_HOTPLUG)) {
+            Ok(name) => dev_name = name,
+            Err(e) => {
+                let watcher = GLOBAL_DEVICE_WATCHER.clone();
+                let mut w = watcher.lock().unwrap();
+                w.remove_entry(&pci_addr);
+
+                return Err(ErrorKind::ErrorCode(format!(
+                    "Timeout reached after {} waiting for device {}",
+                    TIMEOUT_HOTPLUG, &pci_addr
+                ))
+                .into());
+            }
+        }
+    }
+
+    Ok(format!("{}/{}", SYSTEM_DEV_PATH, &dev_name))
 }

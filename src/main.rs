@@ -28,7 +28,7 @@ use signal_hook::{iterator::Signals, SIGCHLD};
 use nix::sys::wait::{self, WaitStatus};
 use nix::unistd;
 use std::sync::{Arc, Mutex};
-
+use std::collections::HashMap;
 
 mod mount;
 mod namespace;
@@ -48,6 +48,11 @@ mod grpc;
 
 const VSOCK_ADDR: &'static str = "vsock://-1";
 const VSOCK_PORT: u16 = 1024;
+
+lazy_static! {
+    static ref GLOBAL_DEVICE_WATCHER: Arc<Mutex<HashMap<String, Sender<String>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+}
 
 fn main() {
     simple_logging::log_to_stderr(LevelFilter::Info);

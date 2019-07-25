@@ -28,6 +28,8 @@ const DRIVEREPHEMERALTYPE: &'static str = "ephemeral";
 
 const ROOTBUSPATH: &'static str = "/devices/pci0000:00";
 
+pub const TIMEOUT_HOTPLUG: u64 = 3;
+
 #[cfg_attr(rustfmt, rustfmt_skip)]
 lazy_static! {
     pub static ref FLAGS: HashMap<&'static str, (bool, MsFlags)> = {
