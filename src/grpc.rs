@@ -1099,7 +1099,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 				let mut s = sandbox.lock().unwrap();
 				s.mounts = m
 			},
-            Err(e) => err = e,
+            Err(e) => err = e.to_string(),
         };
 
         if err.len() != 0 {

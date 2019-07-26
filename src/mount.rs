@@ -1,10 +1,12 @@
 use libcontainer::cgroups::fs::Manager as FsManager;
 use libcontainer::cgroups::Manager as CgroupManager;
+use libcontainer::errors::*;
 use std::collections::HashMap;
 use std::ffi::{CString, OsStr};
 use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
 
 use std::path::Path;
 use std::ptr::null;
@@ -15,6 +17,7 @@ use std::ffi::CStr;
 use libc::{c_char, c_void, mount};
 use nix::mount::MsFlags;
 
+use crate::device::get_pci_device_name;
 use crate::protocols::agent::Storage;
 use crate::Sandbox;
 
@@ -73,7 +76,7 @@ lazy_static! {
 
 // StorageHandler is the type of callback to be defined to handle every
 // type of storage driver.
-type StorageHandler = fn(&Storage, Arc<Mutex<Sandbox>>) -> Result<String, String>;
+type StorageHandler = fn(&Storage, Arc<Mutex<Sandbox>>) -> Result<String>;
 
 // StorageHandlerList lists the supported drivers.
 #[cfg_attr(rustfmt, rustfmt_skip)]
@@ -115,58 +118,46 @@ impl<'a> BareMount<'a> {
         }
     }
 
-    pub fn mount(&self) -> Result<(), String> {
+    pub fn mount(&self) -> Result<()> {
         let mut source = null();
         let mut dest = null();
         let mut fs_type = null();
         let mut options = null();
-        let cstr_options;
-        let cstr_source;
-        let cstr_dest;
-        let cstr_fs_type;
+        let cstr_options: CString;
+        let cstr_source: CString;
+        let cstr_dest: CString;
+        let cstr_fs_type: CString;
 
         if self.source.len() == 0 {
-            return Err("need mount source".to_string());
+            return Err(ErrorKind::ErrorCode("need mount source".to_string()).into());
         }
 
         if self.destination.len() == 0 {
-            return Err("need mount destination".to_string());
+            return Err(ErrorKind::ErrorCode("need mount destination".to_string()).into());
         }
 
-        match CString::new(self.source) {
-            Ok(s) => cstr_source = s,
-            Err(err) => return Err(err.to_string()),
-        }
+        let cstr_source = CString::new(self.source)?;
         source = cstr_source.as_ptr();
 
-        match CString::new(self.destination) {
-            Ok(d) => cstr_dest = d,
-            Err(e) => return Err(e.to_string()),
-        }
+        let cstr_dest = CString::new(self.destination)?;
         dest = cstr_dest.as_ptr();
 
         if self.fs_type.len() == 0 {
-            return Err("need mount FS type".to_string());
+            return Err(ErrorKind::ErrorCode("need mount FS type".to_string()).into());
         }
 
-        match CString::new(self.fs_type) {
-            Ok(fs_type) => cstr_fs_type = fs_type,
-            Err(err) => return Err(err.to_string()),
-        }
+        let cstr_fs_type = CString::new(self.fs_type)?;
         fs_type = cstr_fs_type.as_ptr();
 
         if self.options.len() > 0 {
-            match CString::new(self.options) {
-                Ok(opts) => cstr_options = opts,
-                Err(err) => return Err(err.to_string()),
-            }
+            let cstr_options = CString::new(self.options)?;
             options = cstr_options.as_ptr() as *const c_void;
         }
 
         let rc = unsafe { mount(source, dest, fs_type, self.flags.bits(), options) };
 
         if rc < 0 {
-            return Err(io::Error::last_os_error().to_string());
+            return Err(ErrorKind::ErrorCode(io::Error::last_os_error().to_string()).into());
         }
         Ok(())
     }
@@ -175,7 +166,7 @@ impl<'a> BareMount<'a> {
 fn ephemeral_storage_handler(
     storage: &Storage,
     sandbox: Arc<Mutex<Sandbox>>,
-) -> Result<String, String> {
+) -> Result<String> {
     let s = sandbox.clone();
     let mut sb = s.lock().unwrap();
     let new_storage = sb.set_sandbox_storage(&storage.mount_point);
@@ -185,37 +176,55 @@ fn ephemeral_storage_handler(
     }
 
     if let Err(err) = fs::create_dir_all(Path::new(&storage.mount_point)) {
-        return Err(err.to_string());
+        return Err(err.into());
     }
 
     common_storage_handler(storage)
 }
 
-fn virtio9p_storage_handler(
-    storage: &Storage,
-    sandbox: Arc<Mutex<Sandbox>>,
-) -> Result<String, String> {
+fn virtio9p_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
     common_storage_handler(storage)
 }
 
-// virtioMmioBlkStorageHandler handles the storage for mmio blk driver.
+// virtiommio_blk_storage_handler handles the storage for mmio blk driver.
 fn virtiommio_blk_storage_handler(
     storage: &Storage,
     sandbox: Arc<Mutex<Sandbox>>,
-) -> Result<String, String> {
+) -> Result<String> {
     //The source path is VmPath
     common_storage_handler(storage)
 }
 
-// virtioFSStorageHandler handles the storage for virtio-fs.
-fn virtiofs_storage_handler(
-    storage: &Storage,
-    sandbox: Arc<Mutex<Sandbox>>,
-) -> Result<String, String> {
+// virtiofs_storage_handler handles the storage for virtio-fs.
+fn virtiofs_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
     common_storage_handler(storage)
 }
 
-fn common_storage_handler(storage: &Storage) -> Result<String, String> {
+// virtio_blk_storage_handler handles the storage for blk driver.
+fn virtio_blk_storage_handler(
+    storage: &Storage,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<String> {
+
+    let mut storage = storage.clone();
+    // If hot-plugged, get the device node path based on the PCI address else
+    // use the virt path provided in Storage Source
+    if storage.source.starts_with("/dev") {
+        let metadata = fs::metadata(&storage.source)?;
+
+        let mode = metadata.permissions().mode();
+        if mode & libc::S_IFBLK == 0 {
+            return Err(ErrorKind::ErrorCode(format!("Invalid device {}", &storage.source)).into());
+        }
+    } else {
+        let dev_path = get_pci_device_name(sandbox, &storage.source)?;
+        storage.source = dev_path;
+    }
+
+    common_storage_handler(&storage)
+}
+
+fn common_storage_handler(storage: &Storage) -> Result<String> {
     // Mount the storage device.
     let mount_point = storage.mount_point.to_string();
 
@@ -223,7 +232,7 @@ fn common_storage_handler(storage: &Storage) -> Result<String, String> {
 }
 
 // mount_storage performs the mount described by the storage structure.
-fn mount_storage(storage: &Storage) -> Result<(), String> {
+fn mount_storage(storage: &Storage) -> Result<()> {
     match storage.fstype.as_str() {
         DRIVER9PTYPE | DRIVERVIRTIOFSTYPE => {
             let dest_path = Path::new(storage.mount_point.as_str());
@@ -288,19 +297,17 @@ fn parse_mount_flags_and_options(options_vec: Vec<String>) -> (MsFlags, String) 
 // associated operations such as waiting for the device to show up, and mount
 // it to a specific location, according to the type of handler chosen, and for
 // each storage.
-pub fn add_storages(
-    storages: Vec<Storage>,
-    sandbox: Arc<Mutex<Sandbox>>,
-) -> Result<Vec<String>, String> {
+pub fn add_storages(storages: Vec<Storage>, sandbox: Arc<Mutex<Sandbox>>) -> Result<Vec<String>> {
     let mut mount_list = Vec::new();
 
     for storage in storages {
         let handler = match STORAGEHANDLERLIST.get(storage.driver.as_str()) {
             None => {
-                return Err(format!(
+                return Err(ErrorKind::ErrorCode(format!(
                     "Failed to find the storage handler {}",
                     storage.driver
                 ))
+                .into());
             }
             Some(f) => f,
         };
