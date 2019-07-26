@@ -20,15 +20,18 @@ use std::io::Read;
 use std::{io, thread, time};
 //use lazy_static::{self, initialize};
 use std::env;
+use unistd::Pid;
 use std::time::Duration;
 use std::path::Path;
 use prctl::set_child_subreaper;
 use std::sync::mpsc::{self, Sender, Receiver};
 use signal_hook::{iterator::Signals, SIGCHLD};
 use nix::sys::wait::{self, WaitStatus};
+use std::os::unix::io::AsRawFd;
 use nix::unistd;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use libcontainer::errors::*;
 
 mod mount;
 mod namespace;
@@ -43,6 +46,7 @@ use namespace::Namespace;
 use network::Network;
 use sandbox::Sandbox;
 use uevent::watch_uevents;
+use mount::general_mount;
 
 mod grpc;
 
@@ -54,10 +58,14 @@ lazy_static! {
         Arc::new(Mutex::new(HashMap::new()));
 }
 
-fn main() {
+fn main() -> Result<()> {
     simple_logging::log_to_stderr(LevelFilter::Info);
 	// simple_logging::log_to_file("/run/log.agent", LevelFilter::Info);
     env::set_var("RUST_BACKTRACE", "full");
+
+    if unistd::getpid() == Pid::from_raw(1) {
+        init_agent_as_init()?;
+    }
 
     // Initialize unique sandbox structure.
     let sandbox = Arc::new(Mutex::new(Sandbox::new()));
@@ -93,16 +101,15 @@ fn main() {
 
     let _ = server.shutdown().wait();
     let _ = fs::remove_file("/tmp/testagent");
+
+    Ok(())
 }
 
-fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<(), String>{
+fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()>{
     set_child_subreaper(true)
         .map_err(|err | format!("failed  to setup agent as a child subreaper, failed with {}", err));
 
-    let signals = match Signals::new(&[SIGCHLD]) {
-        Ok(s) => s,
-        Err(err) => return Err(format!("failed to setup singal handler with err {}", err.to_string()))
-    };
+    let signals = Signals::new(&[SIGCHLD])?;
 
     let mut s = sandbox.clone();
 
@@ -150,4 +157,21 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<(), String>{
 fn setup_signal_handler() -> Result<(), String>{
     set_child_subreaper(true)
         .map_err(|err | format!("failed  to setup agent as a child subreaper, failed with {}", err))
+}
+
+// init_agent_as_init will do the initializations such as setting up the rootfs
+// when this agent has been run as the init process.
+fn init_agent_as_init() -> Result<()> {
+    general_mount()?;
+
+    fs::remove_file(Path::new("/dev/ptmx"))?;
+    fs::soft_link(Path::new("/dev/pts/ptmx"), Path::new("/dev/ptmx"))?;
+
+    unistd::setsid()?;
+
+    unsafe { libc::ioctl(io::stdin().as_raw_fd(), libc::TIOCSCTTY, 1); }
+
+    env::set_var("PATH", "/bin:/sbin/:/usr/bin/:/usr/sbin/");
+
+    Ok(())
 }

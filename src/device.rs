@@ -1,4 +1,5 @@
 use libcontainer::errors::*;
+use std::fs::OpenOptions;
 use std::fs::{self, DirEntry, File};
 use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -42,9 +43,7 @@ pub fn rescan_pci_bus() -> Result<()> {
 }
 
 pub fn online_device(path: &str) -> Result<()> {
-    let byte: [u8; 1] = [1; 1];
-    let mut f = File::create(path)?;
-    f.write(&byte)?;
+   fs::write(path, "1")?;
     Ok(())
 }
 

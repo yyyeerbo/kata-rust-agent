@@ -7,6 +7,7 @@ use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
+use std::iter::FromIterator;
 
 use std::path::Path;
 use std::ptr::null;
@@ -74,6 +75,25 @@ lazy_static! {
     };
 }
 
+pub struct INIT_MOUNT {
+    fstype: &'static str,
+    src: &'static str,
+    dest: &'static str,
+    options: Vec<&'static str>
+}
+
+#[cfg_attr(rustfmt, rustfmt_skip)]
+lazy_static! {
+    pub static ref INIT_ROOTFS_MOUNTS: Vec<INIT_MOUNT> = vec![
+        INIT_MOUNT{fstype: "proc", src: "proc", dest: "/proc", options: vec!["nosuid", "nodev", "noexec"]},
+        INIT_MOUNT{fstype: "sysfs", src: "sysfs", dest: "/sys", options: vec!["nosuid", "nodev", "noexec"]},
+        INIT_MOUNT{fstype: "devtmpfs", src: "dev", dest: "/dev", options: vec!["nosuid"]},
+        INIT_MOUNT{fstype: "tmpfs", src: "tmpfs", dest: "/dev/shm", options: vec!["nosuid", "nodev"]},
+        INIT_MOUNT{fstype: "devpts", src: "devpts", dest: "/dev/pts", options: vec!["nosuid", "noexec"]},
+        INIT_MOUNT{fstype: "tmpfs", src: "tmpfs", dest: "/run", options: vec!["nosuid", "nodev"]},
+    ];
+}
+
 // StorageHandler is the type of callback to be defined to handle every
 // type of storage driver.
 type StorageHandler = fn(&Storage, Arc<Mutex<Sandbox>>) -> Result<String>;
@@ -136,28 +156,29 @@ impl<'a> BareMount<'a> {
             return Err(ErrorKind::ErrorCode("need mount destination".to_string()).into());
         }
 
-        let cstr_source = CString::new(self.source)?;
+        cstr_source = CString::new(self.source)?;
         source = cstr_source.as_ptr();
 
-        let cstr_dest = CString::new(self.destination)?;
+        cstr_dest = CString::new(self.destination)?;
         dest = cstr_dest.as_ptr();
 
         if self.fs_type.len() == 0 {
             return Err(ErrorKind::ErrorCode("need mount FS type".to_string()).into());
         }
 
-        let cstr_fs_type = CString::new(self.fs_type)?;
+        cstr_fs_type = CString::new(self.fs_type)?;
         fs_type = cstr_fs_type.as_ptr();
 
         if self.options.len() > 0 {
-            let cstr_options = CString::new(self.options)?;
+            cstr_options = CString::new(self.options)?;
             options = cstr_options.as_ptr() as *const c_void;
         }
 
+        info!("mount source={:?}, dest={:?}, fs_type={:?}, options={:?}", self.source, self.destination, self.fs_type, self.options);
         let rc = unsafe { mount(source, dest, fs_type, self.flags.bits(), options) };
 
         if rc < 0 {
-            return Err(ErrorKind::ErrorCode(io::Error::last_os_error().to_string()).into());
+            return Err(ErrorKind::ErrorCode(format!("failed to mount {:?} to {:?}, with error: {}", self.source, self.destination, io::Error::last_os_error())).into());
         }
         Ok(())
     }
@@ -237,14 +258,14 @@ fn mount_storage(storage: &Storage) -> Result<()> {
         DRIVER9PTYPE | DRIVERVIRTIOFSTYPE => {
             let dest_path = Path::new(storage.mount_point.as_str());
             if !dest_path.exists() {
-                fs::create_dir_all(dest_path)
-                    .map_err(|err| format!("Create mount destination failed with {:?}", err));
+                fs::create_dir_all(dest_path).chain_err(|| "Create mount destination failed")?;
             }
         }
         _ => (),
     }
 
     let options_vec = storage.options.to_vec();
+    let options_vec = Vec::from_iter(options_vec.iter().map(String::as_str));
     let (flags, options) = parse_mount_flags_and_options(options_vec);
 
     info!(
@@ -269,13 +290,13 @@ fn mount_storage(storage: &Storage) -> Result<()> {
     bare_mount.mount()
 }
 
-fn parse_mount_flags_and_options(options_vec: Vec<String>) -> (MsFlags, String) {
+fn parse_mount_flags_and_options(options_vec: Vec<&str>) -> (MsFlags, String) {
     let mut flags = MsFlags::empty();
     let mut options: String = "".to_string();
 
     for opt in options_vec {
         if opt.len() != 0 {
-            match FLAGS.get(opt.as_str()) {
+            match FLAGS.get(opt) {
                 Some(x) => {
                     let (_, f) = *x;
                     flags = flags | f;
@@ -324,4 +345,31 @@ pub fn add_storages(storages: Vec<Storage>, sandbox: Arc<Mutex<Sandbox>>) -> Res
     }
 
     Ok(mount_list)
+}
+
+pub fn general_mount() -> Result<()> {
+    for m in INIT_ROOTFS_MOUNTS.iter() {
+        let options_vec: Vec<&str> = m.options.clone();
+
+        let (flags, options) = parse_mount_flags_and_options(options_vec);
+
+        let bare_mount = BareMount::new(
+            m.src,
+            m.dest,
+            m.fstype,
+            flags,
+            options.as_str(),
+        );
+
+        fs::create_dir_all(Path::new(m.dest)).chain_err(|| "could not creat directory")?;
+
+        if let Err(err) = bare_mount.mount() {
+            if m.src != "dev" {
+                return Err(err.into());
+            }
+            error!("Could not mount filesystem from {} to {}", m.src, m.dest);
+        }
+    }
+
+    Ok(())
 }

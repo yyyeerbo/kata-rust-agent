@@ -76,22 +76,19 @@ impl protocols::agent_grpc::AgentService for agentService {
 
 		// re-scan PCI bus
 		// looking for hidden devices
-
-/*
-		match rescan_pci_bus() {
+		match rescan_pci_bus().chain_err(|| "Could not rescan PCI bus") {
 			Ok(_) => (),
 			Err(e) => {
 				let f = sink
 					.fail(RpcStatus::new(
 						RpcStatusCode::Internal,
-						Some("Could not rescan PCI bus".to_string()),
+						Some(e.to_string()),
 					))
 					.map_err(move |e| error!("fail to reply {:?}", req));
 				ctx.spawn(f);
 				return;
 			}
 		};
-*/
 
         update_container_namespaces(&s, oci);
 
