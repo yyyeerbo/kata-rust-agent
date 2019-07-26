@@ -1062,37 +1062,43 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::CreateSandboxRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
-        let sandbox = self.sandbox.clone();
-        let mut s = sandbox.lock().unwrap();
+		let mut err = "".to_string();
 
-        let mut err = "".to_string();
+		{
+			let sandbox = self.sandbox.clone();
+			let mut s = sandbox.lock().unwrap();
 
-        let _ = fs::remove_dir_all(CONTAINER_BASE);
-        let _ = fs::create_dir_all(CONTAINER_BASE);
+			let _ = fs::remove_dir_all(CONTAINER_BASE);
+			let _ = fs::create_dir_all(CONTAINER_BASE);
 
-        s.hostname = req.hostname.clone();
-        s.running = true;
+			s.hostname = req.hostname.clone();
+			s.running = true;
 
-        if req.sandbox_id.len() > 0 {
-            s.id = req.sandbox_id.clone();
-        }
+			if req.sandbox_id.len() > 0 {
+				s.id = req.sandbox_id.clone();
+			}
 
-        match s.setup_shared_namespaces() {
-            Ok(t) => (),
-            Err(e) => err = e,
-        }
-        if err.len() != 0 {
-            let rpc_status =
-                grpcio::RpcStatus::new(grpcio::RpcStatusCode::FailedPrecondition, Some(err));
-            let f = sink
-                .fail(rpc_status)
-                .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
-            ctx.spawn(f);
-            return;
-        }
+			match s.setup_shared_namespaces() {
+				Ok(t) => (),
+				Err(e) => err = e,
+			}
+			if err.len() != 0 {
+				let rpc_status =
+					grpcio::RpcStatus::new(grpcio::RpcStatusCode::FailedPrecondition, Some(err));
+				let f = sink
+					.fail(rpc_status)
+					.map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+				ctx.spawn(f);
+				return;
+			}
+		}
 
-        match add_storages(req.storages.to_vec(), &mut s) {
-            Ok(m) => s.mounts = m,
+        match add_storages(req.storages.to_vec(), self.sandbox.clone()) {
+            Ok(m) => {
+				let sandbox = self.sandbox.clone();
+				let mut s = sandbox.lock().unwrap();
+				s.mounts = m
+			},
             Err(e) => err = e,
         };
 

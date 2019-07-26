@@ -8,7 +8,7 @@ use std::os::unix::ffi::OsStrExt;
 
 use std::path::Path;
 use std::ptr::null;
-use std::sync::MutexGuard;
+use std::sync::{Arc, Mutex};
 
 use std::ffi::CStr;
 
@@ -73,7 +73,7 @@ lazy_static! {
 
 // StorageHandler is the type of callback to be defined to handle every
 // type of storage driver.
-type StorageHandler = fn(&Storage, &mut MutexGuard<Sandbox>) -> Result<String, String>;
+type StorageHandler = fn(&Storage, Arc<Mutex<Sandbox>>) -> Result<String, String>;
 
 // StorageHandlerList lists the supported drivers.
 #[cfg_attr(rustfmt, rustfmt_skip)]
@@ -174,9 +174,11 @@ impl<'a> BareMount<'a> {
 
 fn ephemeral_storage_handler(
     storage: &Storage,
-    sandbox: &mut MutexGuard<Sandbox>,
+    sandbox: Arc<Mutex<Sandbox>>,
 ) -> Result<String, String> {
-    let new_storage = sandbox.set_sandbox_storage(&storage.mount_point);
+    let s = sandbox.clone();
+    let mut sb = s.lock().unwrap();
+    let new_storage = sb.set_sandbox_storage(&storage.mount_point);
 
     if !new_storage {
         return Ok("".to_string());
@@ -191,7 +193,7 @@ fn ephemeral_storage_handler(
 
 fn virtio9p_storage_handler(
     storage: &Storage,
-    sandbox: &mut MutexGuard<Sandbox>,
+    sandbox: Arc<Mutex<Sandbox>>,
 ) -> Result<String, String> {
     common_storage_handler(storage)
 }
@@ -199,7 +201,7 @@ fn virtio9p_storage_handler(
 // virtioMmioBlkStorageHandler handles the storage for mmio blk driver.
 fn virtiommio_blk_storage_handler(
     storage: &Storage,
-    sandbox: &mut MutexGuard<Sandbox>,
+    sandbox: Arc<Mutex<Sandbox>>,
 ) -> Result<String, String> {
     //The source path is VmPath
     common_storage_handler(storage)
@@ -208,7 +210,7 @@ fn virtiommio_blk_storage_handler(
 // virtioFSStorageHandler handles the storage for virtio-fs.
 fn virtiofs_storage_handler(
     storage: &Storage,
-    sandbox: &mut MutexGuard<Sandbox>,
+    sandbox: Arc<Mutex<Sandbox>>,
 ) -> Result<String, String> {
     common_storage_handler(storage)
 }
@@ -288,7 +290,7 @@ fn parse_mount_flags_and_options(options_vec: Vec<String>) -> (MsFlags, String) 
 // each storage.
 pub fn add_storages(
     storages: Vec<Storage>,
-    sandbox: &mut MutexGuard<Sandbox>,
+    sandbox: Arc<Mutex<Sandbox>>,
 ) -> Result<Vec<String>, String> {
     let mut mount_list = Vec::new();
 
@@ -303,7 +305,7 @@ pub fn add_storages(
             Some(f) => f,
         };
 
-        let mount_point = match handler(&storage, sandbox) {
+        let mount_point = match handler(&storage, sandbox.clone()) {
             // Todo need to rollback the mounted storage if err met.
             Err(e) => return Err(e),
             Ok(m) => m,
