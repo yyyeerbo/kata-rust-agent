@@ -1077,7 +1077,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
 			match s.setup_shared_namespaces() {
 				Ok(t) => (),
-				Err(e) => err = e,
+				Err(e) => err = e.to_string(),
 			}
 			if err.len() != 0 {
 				let rpc_status =

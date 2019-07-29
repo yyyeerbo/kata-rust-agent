@@ -18,6 +18,10 @@ use std::ffi::CStr;
 use libc::{c_char, c_void, mount};
 use nix::mount::MsFlags;
 
+use regex::Regex;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+
 use crate::device::get_pci_device_name;
 use crate::protocols::agent::Storage;
 use crate::Sandbox;
@@ -29,6 +33,9 @@ const DRIVERMMIOBLKTYPE: &'static str = "mmioblk";
 const DRIVERSCSITYPE: &'static str = "scsi";
 const DRIVERNVDIMMTYPE: &'static str = "nvdimm";
 const DRIVEREPHEMERALTYPE: &'static str = "ephemeral";
+pub const TYPEROOTFS: &'static str   = "rootfs";
+
+pub const PROCMOUNTSTATS: &'static str = "/proc/self/mountstats";
 
 const ROOTBUSPATH: &'static str = "/devices/pci0000:00";
 
@@ -372,4 +379,32 @@ pub fn general_mount() -> Result<()> {
     }
 
     Ok(())
+}
+
+// get_mount_fs_type returns the FS type corresponding to the passed mount point and
+// any error ecountered.
+pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
+    if mount_point == "" {
+        return Err(ErrorKind::ErrorCode(format!("Invliad mount point {}", mount_point)).into());
+    }
+
+    let file = File::open(PROCMOUNTSTATS)?;
+    let reader = BufReader::new(file);
+
+    let re = Regex::new(format!("device .+ mounted on {} with fstype (.+)", mount_point).as_str()).unwrap();
+
+    // Read the file line by line using the lines() iterator from std::io::BufRead.
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+        let capes = match re.captures(line.as_str()) {
+            Some(c) => c,
+            None => continue
+        };
+
+        if capes.len() > 1 {
+            return Ok(capes[0].to_string());
+        }
+    }
+
+    Err(ErrorKind::ErrorCode(format!("failed to find FS type for mount point {}", mount_point)).into())
 }

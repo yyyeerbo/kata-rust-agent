@@ -9,6 +9,7 @@ extern crate protocols;
 extern crate prctl;
 extern crate serde_json;
 extern crate signal_hook;
+extern crate regex;
 #[macro_use]
 extern crate scan_fmt;
 
@@ -68,7 +69,12 @@ fn main() -> Result<()> {
     }
 
     // Initialize unique sandbox structure.
-    let sandbox = Arc::new(Mutex::new(Sandbox::new()));
+    let s = Sandbox::new().map_err(|e| {
+        error!("Failed to create sandbox with error: {:?}", e);
+        e
+    })?;
+
+    let sandbox = Arc::new(Mutex::new(s));
 
     setup_signal_handler(sandbox.clone()).unwrap();
     watch_uevents(sandbox.clone());

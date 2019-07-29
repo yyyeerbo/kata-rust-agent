@@ -7,10 +7,11 @@ use libcontainer::cgroups::Manager as CgroupManager;
 use libcontainer::cgroups::fs::Manager as FsManager;
 use std::collections::HashMap;
 use std::sync::mpsc::{Sender, Receiver};
-use libcontainer::errors;
 use libcontainer::container::BaseContainer;
+use libcontainer::errors::*;
 use libc::pid_t;
 use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
+use crate::mount::{get_mount_fs_type, TYPEROOTFS};
 
 #[derive(Debug, Default)]
 pub struct Sandbox {
@@ -32,8 +33,10 @@ pub struct Sandbox {
 }
 
 impl Sandbox{
-    pub fn new() -> Self {
-        Sandbox {
+    pub fn new() -> Result<Self> {
+        let fs_type = get_mount_fs_type("/")?;
+
+        Ok(Sandbox {
             id: "".to_string(),
             hostname: "".to_string(),
             network: Network::new(),
@@ -50,10 +53,10 @@ impl Sandbox{
             running: false,
             no_pivot_root: false,
             enable_grpc_trace: false,
-            sandbox_pid_ns: false,
+            sandbox_pid_ns: fs_type  == TYPEROOTFS,
 			sender: None,
 			rtnl: Some(RtnlHandle::new(NETLINK_ROUTE, 0).unwrap()),
-        }
+        })
     }
 
     pub fn unset_sandbox_storage(&self, path: &str) -> bool {
@@ -72,17 +75,17 @@ impl Sandbox{
         self.hostname = hostname;
     }
 
-    pub fn setup_shared_namespaces(&mut self) -> Result<bool, String> {
+    pub fn setup_shared_namespaces(&mut self) -> Result<bool> {
         // Set up shared IPC namespace
         self.shared_ipcns = match setup_persistent_ns(NSTYPEIPC) {
             Ok(ns) => ns,
-            Err(err) => return Err("Failed to setup persisten IPC namespace ".to_string() + &err),
+            Err(err) => return Err(ErrorKind::ErrorCode(format!("Failed to setup persisten IPC namespace with error: {}", &err)).into())
         };
 
         // Set up shared UTS namespace
         self.shared_utsns = match setup_persistent_ns(NSTYPEUTS) {
             Ok(ns) => ns,
-            Err(err) => return Err("Failed to setup persisten UTS namespace ".to_string() + &err),
+            Err(err) => return Err(ErrorKind::ErrorCode(format!("Failed to setup persisten UTS namespace with error: {} ", &err)).into())
         };
 
         Ok(true)
@@ -127,7 +130,7 @@ impl Sandbox{
         }
     }
 
-	pub fn destroy(&mut self) -> errors::Result<()> {
+	pub fn destroy(&mut self) -> Result<()> {
 		for (_, ctr) in &mut self.containers {
 			ctr.destroy()?;
 		}
