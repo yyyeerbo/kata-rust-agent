@@ -15,6 +15,7 @@ error_chain! {
 		Parse(std::num::ParseIntError);
 		Scanfmt(scan_fmt::parse::ScanError);
 		Ip(std::net::AddrParseError);
+		Regex(regex::Error);
 	}
 	// define new errors
 	errors {

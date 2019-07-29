@@ -16,7 +16,7 @@ use crate::netlink::RtnlHandle;
 pub struct Sandbox {
     pub id: String,
     pub hostname: String,
-    pub containers: HashMap<String, LinuxContainer<FsManager>>,
+    pub containers: HashMap<String, LinuxContainer>,
     pub network: Network,
     pub mounts: Vec<String>,
     pub pci_device_map: HashMap<String, String>,
@@ -88,11 +88,11 @@ impl Sandbox{
         Ok(true)
     }
 
-    pub fn add_container(&mut self, c: LinuxContainer<FsManager>) {
+    pub fn add_container(&mut self, c: LinuxContainer) {
         self.containers.insert(c.id.clone(), c);
     }
 
-    pub fn get_container(&mut self, id: &str) -> Option<&mut LinuxContainer<FsManager>> {
+    pub fn get_container(&mut self, id: &str) -> Option<&mut LinuxContainer> {
         self.containers.get_mut(id)
     }
 

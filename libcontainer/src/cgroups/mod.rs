@@ -1,17 +1,14 @@
 use crate::errors::*;
 // use crate::configs::{FreezerState, Config};
-use crate::stats::Stats;
 use std::collections::HashMap;
+use protocols::oci::{Spec, LinuxResources};
+use protocols::agent::{CgroupStats};
 
 
 pub mod fs;
 pub mod systemd;
 
-pub struct FreezerState {
-}
-
-pub struct Config {
-}
+pub type FreezerState = &'static str;
 
 pub trait Manager {
 	fn apply(&self, pid: i32) -> Result<()> {
@@ -26,7 +23,7 @@ pub trait Manager {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 
-	fn get_stats(&self) -> Result<Stats> {
+	fn get_stats(&self) -> Result<CgroupStats> {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 
@@ -34,7 +31,7 @@ pub trait Manager {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 
-	fn destroy(&self) -> Result<()> {
+	fn destroy(&mut self) -> Result<()> {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 
@@ -42,7 +39,7 @@ pub trait Manager {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 
-	fn set(&self, container: Config) -> Result<()> {
+	fn set(&self, container: &LinuxResources, update: bool) -> Result<()> {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 }

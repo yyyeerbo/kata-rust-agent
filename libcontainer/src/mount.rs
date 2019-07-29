@@ -9,10 +9,15 @@ use nix::sys::stat::{self, Mode, SFlag};
 use nix::fcntl::{self, OFlag};
 use nix::NixPath;
 use libc::uid_t;
+use nix::errno::Errno;
 
+
+use std::string::ToString;
 use lazy_static;
 use crate::container::DEFAULT_DEVICES;
 use crate::errors::*;
+
+use protobuf::{RepeatedField, UnknownFields, CachedSize};
 
 pub struct Info {
 	id: i32,
@@ -76,7 +81,7 @@ lazy_static!{
     };
 }
 
-pub fn init_rootfs(spec: &Spec, bind_device: bool) -> Result<()> {
+pub fn init_rootfs(spec: &Spec, cpath: &HashMap<String, String>, mounts: &HashMap<String, String>, bind_device: bool) -> Result<()> {
 	lazy_static::initialize(&OPTIONS);
 	lazy_static::initialize(&PROPAGATION);
 	lazy_static::initialize(&LINUXDEVICETYPE);
@@ -99,7 +104,7 @@ pub fn init_rootfs(spec: &Spec, bind_device: bool) -> Result<()> {
 	for m in &spec.Mounts {
 		let (mut flags, data) = parse_mount(&m);
 		if m.field_type == "cgroup" {
-			continue;
+			mount_cgroups(m, rootfs, flags, &data, cpath, mounts)?;
 		}
 
 		if m.destination == "/dev" {
@@ -117,6 +122,59 @@ pub fn init_rootfs(spec: &Spec, bind_device: bool) -> Result<()> {
 	ensure_ptmx()?;
 
 	unistd::chdir(&olddir)?;
+
+	Ok(())
+}
+
+fn mount_cgroups(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, cpath: &HashMap<String, String>, mounts: &HashMap<String, String>) -> Result<()> {
+	// mount tmpfs
+	let ctm = Mount {
+		source: "tmpfs".to_string(),
+		field_type: "tmpfs".to_string(),
+		destination: m.destination.clone(),
+		options: RepeatedField::default(),
+		unknown_fields: UnknownFields::default(),
+		cached_size: CachedSize::default(),
+	};
+
+	let cflags = MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV;
+	mount_from(&ctm, rootfs, cflags, "", "")?;
+
+	// bind mount cgroups 
+	for (key, mount) in mounts.iter() {
+		let source = if cpath.get(key).is_some() {
+			cpath.get(key).unwrap()
+		} else {
+			continue;
+		};
+
+		let base = if let Some(o) = mount.rfind('/') {
+			&mount[o + 1..]
+		} else {
+			&mount[..]
+		};
+
+		let destination = format!("{}/{}",m.destination.as_str(), base);
+
+		let bm = Mount {
+			source: source.to_string(),
+			field_type: "bind".to_string(),
+			destination,
+			options: RepeatedField::default(),
+			unknown_fields: UnknownFields::default(),
+			cached_size: CachedSize::default(),
+		};
+
+		mount_from(&bm, rootfs, flags | MsFlags::MS_REC | MsFlags::MS_BIND, "", "")?;
+
+		if flags.contains(MsFlags::MS_RDONLY) {
+			let dest = format!("{}{}", rootfs, m.destination.as_str());
+			mount::mount(Some(dest.as_str()), dest.as_str(),
+				None::<&str>,
+				flags | MsFlags::MS_BIND | MsFlags::MS_REMOUNT,
+				None::<&str>)?;
+		}
+	}
 
 	Ok(())
 }
@@ -302,5 +360,73 @@ fn bind_dev(dev: &LinuxDevice) -> Result<()> {
         None::<&str>,
     )?;
     Ok(())
+}
+
+pub fn finish_rootfs(spec: &Spec) -> Result<()> {
+	if spec.Linux.is_some() {
+		let linux = spec.Linux.as_ref().unwrap();
+
+		for path in linux.MaskedPaths.iter() {
+			mask_path(path)?;
+		}
+
+		for path in linux.ReadonlyPaths.iter() {
+			readonly_path(path)?;
+		}
+	}
+
+	for m in spec.Mounts.iter() {
+		if m.destination == "/dev" {
+			let (flags, _) = parse_mount(m);
+			if flags.contains(MsFlags::MS_RDONLY) {
+				mount::mount(Some("/dev"), "/dev", None::<&str>,
+					flags | MsFlags::MS_REMOUNT, None::<&str>)?;
+			}
+		}
+	}
+
+	if spec.Root.as_ref().unwrap().Readonly {
+		let flags = MsFlags::MS_BIND | MsFlags::MS_RDONLY
+				| MsFlags::MS_NODEV | MsFlags::MS_REMOUNT;
+
+		mount::mount(Some("/"), "/", None::<&str>, flags, None::<&str>)?;
+	}
+	stat::umask(Mode::from_bits_truncate(0o022));
+
+	Ok(())
+}
+
+fn mask_path(path: &str) -> Result<()> {
+	if !path.starts_with("/") || path.contains("..") {
+		return Err(nix::Error::Sys(Errno::EINVAL).into());
+	}
+
+	if let Err(nix::Error::Sys(e)) = mount::mount(Some("/dev/null"),
+			path, None::<&str>, MsFlags::MS_BIND, None::<&str>) {
+		if e != Errno::ENOENT && e != Errno::ENOTDIR {
+			return Err(nix::Error::Sys(e).into());
+		}
+	}
+
+	Ok(())
+}
+
+fn readonly_path(path: &str) -> Result<()> {
+	if !path.starts_with("/") || path.contains("..") {
+		return Err(nix::Error::Sys(Errno::EINVAL).into());
+	}
+
+	if let Err(nix::Error::Sys(Errno::ENOENT)) = mount::mount(
+			Some(&path[1..]), path,
+			None::<&str>, MsFlags::MS_BIND | MsFlags::MS_REC,
+			None::<&str>) {
+		return Ok(())
+	}
+
+	mount::mount(Some(&path[1..]), &path[1..], None::<&str>,
+		MsFlags::MS_BIND | MsFlags::MS_REC | MsFlags::MS_RDONLY
+		| MsFlags::MS_REMOUNT, None::<&str>)?;
+	
+	Ok(())
 }
 

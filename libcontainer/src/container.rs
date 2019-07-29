@@ -7,7 +7,7 @@ use serde_json;
 use lazy_static;
 #[macro_use]
 use error_chain;
-use protocols::oci::{self, Spec, Linux, LinuxNamespace};
+use protocols::oci::{self, Spec, Linux, LinuxNamespace, LinuxResources, POSIXRlimit};
 use std::time::SystemTime;
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc::channel;
@@ -18,7 +18,7 @@ use std::mem;
 use std::mem::transmute;
 use std::os::unix::io::RawFd;
 use std::ffi::CString;
-use crate::sync::Cond;
+// use crate::sync::Cond;
 use std::fs::File;
 use std::process::{Command};
 use protocols::oci::{LinuxDevice, LinuxIDMapping};
@@ -36,8 +36,12 @@ use crate::cgroups::Manager as CgroupManager;
 // use crate::intelrdt::Manager as RdtManager;
 use crate::specconv::CreateOpts;
 use crate::errors::*;
-use crate::stats::Stats;
+// use crate::stats::Stats;
 use crate::mount;
+use crate::cgroups::fs::{Manager as FsManager, self as fscgroup};
+use crate::capabilities::{self, CAPSMAP};
+
+use protocols::agent::{StatsContainerResponse};
 
 use nix::sys::stat::{self, Mode};
 use nix::sys::socket::{self, AddressFamily, SockType, SockProtocol, SockFlag, ControlMessage, MsgFlags, ControlMessageOwned, CmsgBuffer};
@@ -53,7 +57,7 @@ use nix::sys::wait;
 use nix::sys::termios::{self, SetArg, LocalFlags};
 
 use libc::{self, VMIN, VTIME};
-use protobuf::{UnknownFields, CachedSize};
+use protobuf::{UnknownFields, CachedSize, SingularPtrField};
 
 use std::io::{Error as IOError};
 use std::collections::HashMap;
@@ -201,8 +205,8 @@ pub trait BaseContainer {
 	fn config(&self) -> Result<&Config>;
 	fn processes(&self) -> Result<Vec<i32>>;
 	fn get_process(&mut self, eid: &str) -> Result<&mut Process>;
-	fn stats(&self) -> Result<Stats>;
-	fn set(&mut self, config: Config) -> Result<()>;
+	fn stats(&self) -> Result<StatsContainerResponse>;
+	fn set(&mut self, config: LinuxResources) -> Result<()>;
 	fn start(&mut self, mut p: Process) -> Result<()>;
 	fn run(&mut self, mut p: Process) -> Result<()>;
 	fn destroy(&mut self) -> Result<()>;
@@ -215,13 +219,13 @@ pub trait BaseContainer {
 // Or use Mutex<xx> as a member of struct, like C?
 // a lot of String in the struct might be &str
 #[derive(Debug)]
-pub struct LinuxContainer<T>
-where T: CgroupManager
+pub struct LinuxContainer
+// where T: CgroupManager
 {
 	pub id: String,
 	pub root: String,
 	pub config: Config,
-	pub cgroup_manager: Option<T>,
+	pub cgroup_manager: Option<FsManager>,
 	pub init_process_pid: pid_t,
 	pub init_process_start_time: u64,
 	pub uid_map_path: String,
@@ -261,8 +265,7 @@ pub trait Container: BaseContainer {
 //	fn notify_memory_pressure(&self, lvl: PressureLevel) -> Result<(Sender, Receiver)>;
 }
 
-impl<T> BaseContainer for LinuxContainer<T>
-where T: CgroupManager
+impl BaseContainer for LinuxContainer
 {
 	fn id(&self) -> String {
 		self.id.clone()
@@ -298,12 +301,24 @@ where T: CgroupManager
 		Err(ErrorKind::ErrorCode(format!("invalid eid {}", eid)).into())
 	}
 
-	fn stats(&self) -> Result<Stats> {
-		Err(ErrorKind::ErrorCode("not supported".to_string()).into())
+	fn stats(&self) -> Result<StatsContainerResponse> {
+		let mut r = StatsContainerResponse::default();
+
+		if self.cgroup_manager.is_some() {
+			r.cgroup_stats = SingularPtrField::some(self.cgroup_manager.as_ref().unwrap().get_stats()?);
+		}
+
+		// what about network interface stats?
+
+		Ok(r)
 	}
 
-	fn set(&mut self, config: Config) -> Result<()> {
-		self.config = config;
+	fn set(&mut self, r: LinuxResources) -> Result<()> {
+		if self.cgroup_manager.is_some() {
+			self.cgroup_manager.as_ref().unwrap().set(&r, true)?;
+		}
+		self.config.spec.as_mut().unwrap().Linux.as_mut().unwrap().Resources = 
+		SingularPtrField::some(r);
 		Ok(())
 	}
 
@@ -327,6 +342,9 @@ where T: CgroupManager
 
 		lazy_static::initialize(&NAMESPACES);
 		lazy_static::initialize(&DEFAULT_DEVICES);
+		lazy_static::initialize(&RLIMITMAPS);
+		lazy_static::initialize(&CAPSMAP);
+		fscgroup::init_static();
 
 		if self.config.spec.is_none() {
 			return Err(ErrorKind::ErrorCode("no spec".to_string()).into());
@@ -384,7 +402,7 @@ where T: CgroupManager
 		let mut parent: u32 = 0;
 
 		let (child, cfd) = match join_namespaces(&spec,
-			to_new, &to_join, pidns, userns, p.init, &mut parent) {
+			to_new, &to_join, pidns, userns, p.init, self.cgroup_manager.as_ref().unwrap(), &mut parent) {
 			Ok((u, v)) => (u, v),
 			Err(e) => {
 				if parent == 0 {
@@ -488,9 +506,40 @@ where T: CgroupManager
 		// process struct?
 		setup_stdio(&p)?;
 
+		if to_new.contains(CloneFlags::CLONE_NEWNS) {
+			mount::finish_rootfs(spec)?;
+		}
+
 		if !p.cwd.is_empty() {
 			debug!("cwd: {}", p.cwd.as_str());
 			unistd::chdir(p.cwd.as_str())?;
+		}
+
+		// setup uid/gid
+
+		if p.oci.User.is_some() {
+			let guser = p.oci.User.as_ref().unwrap();
+
+			let uid = Uid::from_raw(guser.UID);
+			let gid = Gid::from_raw(guser.GID);
+
+			setid(uid, gid)?;
+
+			if !guser.AdditionalGids.is_empty() {
+				setgroups(guser.AdditionalGids.as_slice())?;
+			}
+		}
+
+		// NoNewPeiviledges, Drop capabilities
+		if p.oci.NoNewPrivileges {
+			if let Err(e) = prctl::set_no_new_privileges(true) {
+				return Err(ErrorKind::ErrorCode("cannot set no new privileges".to_string()).into());
+			}
+		}
+
+		if p.oci.Capabilities.is_some() {
+			let c = p.oci.Capabilities.as_ref().unwrap();
+			capabilities::drop_priviledges(c)?;
 		}
 
 		if p.init {
@@ -737,7 +786,7 @@ fn write_json(fd: RawFd, msg: &SyncPC) -> Result<()>
 	Ok(())
 }
 
-fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool, parent: &mut u32) -> Result<(Pid, RawFd)>
+fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool, cm: &FsManager, parent: &mut u32) -> Result<(Pid, RawFd)>
 {
 	// let ccond = Cond::new().chain_err(|| "create cond failed")?;
 	// let pcond = Cond::new().chain_err(|| "create cond failed")?;
@@ -746,6 +795,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 	let (crfd, pwfd) = unistd::pipe2(OFlag::O_CLOEXEC)?;
 
 	let linux = spec.Linux.as_ref().unwrap();
+	let res = linux.Resources.as_ref();
 	
 	match unistd::fork()? {
 		ForkResult::Parent {child} => {
@@ -763,6 +813,16 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			}
 
 			// apply cgroups
+			if init {
+				if res.is_some() {
+					cm.set(res.unwrap(), false)?;
+				}
+			}
+
+			if res.is_some() {
+				cm.apply(child.as_raw())?;
+			}
+
 			write_json(pwfd, &SyncPC{pid: 0})?;
 
 			let mut pid = child.as_raw();
@@ -823,7 +883,22 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			unistd::close(pfd)?;
 			unistd::close(pwfd)?;
 			// set oom_score_adj
+
+			let p = if spec.Process.is_some() {
+				spec.Process.as_ref().unwrap()
+			} else {
+				return Err(nix::Error::Sys(Errno::EINVAL).into());
+			};
+
+			if p.OOMScoreAdj > 0 {
+				fs::write("/proc/self/oom_score_adj", p.OOMScoreAdj.to_string().as_bytes())?
+			}
+
 			// set rlimit
+			for rl in p.Rlimits.iter() {
+				setrlimit(rl)?;
+			}
+
 			if userns {
 				sched::unshare(CloneFlags::CLONE_NEWUSER)?;
 			}
@@ -933,7 +1008,10 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 	if to_new.contains(CloneFlags::CLONE_NEWNS) {
 		// setup rootfs
 		info!("setup rootfs!");
-		mount::init_rootfs(&spec, bind_device)?;
+		mount::init_rootfs(&spec,
+			&cm.paths,
+			&cm.mounts,
+			bind_device)?;
 	}
 
 	// wait until parent notified
@@ -960,7 +1038,10 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 		// pivot root
 		mount::pivot_rootfs(rootfs)?;
 		// unistd::chroot(rootfs)?;
-		unistd::chdir("/")?;
+
+		// setup sysctl
+		set_sysctls(&linux.Sysctl)?;
+		// unistd::chdir("/")?;
 		if let Err(_) = stat::stat("marker") {
 			info!("not in expect root!!");
 		}
@@ -1081,9 +1162,10 @@ fn setid(uid: Uid, gid: Gid) -> Result<()> {
         unistd::setresuid(uid, uid, uid)?;
     }
     // if we change from zero, we lose effective caps
-    // if uid != Uid::from_raw(0) {
-    //    capabilities::reset_effective()?;
-    // }
+    if uid != Uid::from_raw(0) {
+		capabilities::reset_effective()?;
+    }
+
     if let Err(e) = prctl::set_keep_capabilities(false) {
         bail!(format!("set keep capabilities returned {}", e));
     };
@@ -1091,8 +1173,7 @@ fn setid(uid: Uid, gid: Gid) -> Result<()> {
 }
 
 
-impl<U> LinuxContainer<U>
-where U: CgroupManager
+impl LinuxContainer
 {
 	pub fn new<T: Into<String> + Display + Clone>(id: T, base: T, config: Config) -> Result<Self> {
 		let base = base.into();
@@ -1111,10 +1192,30 @@ where U: CgroupManager
 				Some(unistd::getgid()))
 		.chain_err(|| format!("cannot change onwer of container {} root", id))?;
 
+		if config.spec.is_none() {
+			return Err(nix::Error::Sys(Errno::EINVAL).into());
+		}
+
+		let spec = config.spec.as_ref().unwrap();
+
+		if spec.Linux.is_none() {
+			return Err(nix::Error::Sys(Errno::EINVAL).into());
+		}
+
+		let linux = spec.Linux.as_ref().unwrap();
+
+		let cpath = if linux.CgroupsPath.is_empty() {
+			format!("/{}", id.as_str())
+		} else {
+			linux.CgroupsPath.clone()
+		};
+
+		let cgroup_manager = FsManager::new(cpath.as_str())?;
+
 		Ok(LinuxContainer {
 			id: id,
 			root,
-			cgroup_manager: None,
+			cgroup_manager: Some(cgroup_manager),
 			status: Some("stopped".to_string()),
 			uid_map_path: String::from(""),
 			gid_map_path: "".to_string(),
@@ -1173,4 +1274,78 @@ where U: CgroupManager
 		cmd.env("_LINCONTAINER_INITTYPE", INITSTANDARD);
 	}
 */
+}
+
+lazy_static! {
+	pub static ref RLIMITMAPS: HashMap<String, libc::c_int> = {
+		let mut m = HashMap::new();
+		m.insert("RLIMIT_CPU".to_string(), libc::RLIMIT_CPU);
+		m.insert("RLIMIT_FSIZE".to_string(), libc::RLIMIT_FSIZE);
+		m.insert("RLIMIT_DATA".to_string(), libc::RLIMIT_DATA);
+		m.insert("RLIMIT_STACK".to_string(), libc::RLIMIT_STACK);
+		m.insert("RLIMIT_CORE".to_string(), libc::RLIMIT_CORE);
+		m.insert("RLIMIT_RSS".to_string(), libc::RLIMIT_RSS);
+		m.insert("RLIMIT_NPROC".to_string(), libc::RLIMIT_NPROC);
+		m.insert("RLIMIT_NOFILE".to_string(), libc::RLIMIT_NOFILE);
+		m.insert("RLIMIT_MEMLOCK".to_string(), libc::RLIMIT_MEMLOCK);
+		m.insert("RLIMIT_AS".to_string(), libc::RLIMIT_AS);
+		m.insert("RLIMIT_LOCKS".to_string(), libc::RLIMIT_LOCKS);
+		m.insert("RLIMIT_SIGPENDING".to_string(), libc::RLIMIT_SIGPENDING);
+		m.insert("RLIMIT_MSGQUEUE".to_string(), libc::RLIMIT_MSGQUEUE);
+		m.insert("RLIMIT_NICE".to_string(), libc::RLIMIT_NICE);
+		m.insert("RLIMIT_RTPRIO".to_string(), libc::RLIMIT_RTPRIO);
+		m.insert("RLIMIT_RTTIME".to_string(), libc::RLIMIT_RTTIME);
+		m
+	};
+}
+
+fn setrlimit(limit: &POSIXRlimit) -> Result<()> {
+	let rl = libc::rlimit {
+		rlim_cur: limit.Soft,
+		rlim_max: limit.Hard,
+	};
+
+	let res = if RLIMITMAPS.get(limit.Type.as_str()).is_some() {
+		*RLIMITMAPS.get(limit.Type.as_str()).unwrap()
+	} else {
+		return Err(nix::Error::Sys(Errno::EINVAL).into());
+	};
+
+	let ret = unsafe { libc::setrlimit(res as i32, &rl as *const libc::rlimit) };
+
+	Errno::result(ret).map(drop)?;
+
+	Ok(())
+}
+
+fn setgroups(grps: &[libc::gid_t]) -> Result<()> {
+	let ret = unsafe { libc::setgroups(grps.len(), grps.as_ptr() as *const libc::gid_t) };
+	Errno::result(ret).map(drop)?;
+	Ok(())
+}
+
+use std::fs::OpenOptions;
+use std::io::Write;
+
+fn set_sysctls(sysctls: &HashMap<String, String>) -> Result<()> {
+	for (key, value) in sysctls {
+		let name = format!("/proc/sys/{}", key.replace('.', "/"));
+		let mut file = match OpenOptions::new()
+							.read(true)
+							.write(true)
+							.create(false)
+							.open(name.as_str()) {
+			Ok(f) => f,
+			Err(e) => {
+				if e.kind() == std::io::ErrorKind::NotFound {
+					continue;
+				}
+				return Err(e.into());
+			}
+		};
+
+		file.write_all(value.as_bytes())?;
+	}
+
+	Ok(())
 }

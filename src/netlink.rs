@@ -2309,6 +2309,11 @@ impl RtnlHandle {
 
 		Ok(rt.clone())
 	}
+	pub fn handle_localhost(&mut self) -> Result<()> {
+		let ifi = self.find_link_by_name("lo")?;
+
+		self.set_link_status(&ifi, true)
+	}
 }
 
 unsafe fn parse_attrs(mut rta: *mut rtattr, mut rtalen: u32, max: usize) -> Result<Vec<*const rtattr>> {

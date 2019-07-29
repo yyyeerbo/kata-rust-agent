@@ -55,6 +55,7 @@ pub struct Process {
 	pub pid: pid_t,
 
 	pub exit_code: i32,
+	pub oci: OCIProcess,
 }
 
 pub trait ProcessOperations {
@@ -107,6 +108,7 @@ impl Process {
 			init,
 			pid: -1,
 			exit_code: 0,
+			oci: ocip.clone(),
 		};
 
 		info!("before create console socket!\n");

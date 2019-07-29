@@ -85,7 +85,7 @@ impl protocols::agent_grpc::AgentService for agentService {
             rootless_cgroup: false,
         };
 
-        let mut ctr: LinuxContainer<FsManager> = match LinuxContainer::new(cid.as_str(), CONTAINER_BASE, opts) {
+        let mut ctr: LinuxContainer = match LinuxContainer::new(cid.as_str(), CONTAINER_BASE, opts) {
             Ok(v) => v,
             Err(_) => {
                 info!("create contianer failed!\n");
@@ -161,7 +161,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let sandbox = self.sandbox.clone();
         let mut s = sandbox.lock().unwrap();
 
-        let mut ctr: &mut LinuxContainer<FsManager> = match s.get_container(cid.as_str()) {
+        let mut ctr: &mut LinuxContainer = match s.get_container(cid.as_str()) {
             Some(cr) => cr,
             None => {
                 let f = sink
