@@ -11,6 +11,10 @@ use nix::NixPath;
 use libc::uid_t;
 use nix::errno::Errno;
 
+use scan_fmt;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader};
+use path_absolutize::*;
 
 use std::string::ToString;
 use lazy_static;
@@ -19,6 +23,8 @@ use crate::errors::*;
 
 use protobuf::{RepeatedField, UnknownFields, CachedSize};
 
+// Info reveals information about a particular mounted filesystem. This
+// struct is populated from the content in the /proc/<pid>/mountinfo file.
 pub struct Info {
 	id: i32,
 	parent: i32,
@@ -32,6 +38,8 @@ pub struct Info {
 	source: String,
 	vfs_opts: String,
 }
+
+const MOUNTINFOFORMAT: &'static str = "{d} {d} {d}:{d} {} {} {} {}";
 
 lazy_static!{
 	static ref PROPAGATION: HashMap<&'static str, MsFlags> = {
@@ -229,6 +237,105 @@ pub fn pivot_rootfs<P: ?Sized + NixPath>(path: &P) -> Result<()> {
     unistd::fchdir(newroot)?;
 	stat::umask(Mode::from_bits_truncate(0o022));
     Ok(())
+}
+
+// Parse /proc/self/mountinfo because comparing Dev and ino does not work from
+// bind mounts
+fn parse_mount_table() -> Result<Vec<Info>> {
+    let file = File::open("/proc/self/mountinfo")?;
+    let reader = BufReader::new(file);
+    let mut infos = Vec::new();
+
+
+    for (index, line) in reader.lines().enumerate() {
+        let line = line?;
+
+        let (id,
+            parent,
+            major,
+            minor,
+            root,
+            mount_point,
+            opts,
+            optional,
+          ) = scan_fmt!(&line, MOUNTINFOFORMAT,
+                i32, i32, i32, i32, String, String, String, String)?;
+
+        let fields: Vec<&str> = line.split("-").collect();
+        if fields.len() == 2 {
+           let (fstype, source, vfs_opts) = scan_fmt!(fields[1], "{} {} {}", String, String, String)?;
+
+            let mut optional_new = String::new();
+            if optional != "-" {
+                optional_new = optional;
+            }
+
+            let info = Info {
+                id,
+                parent,
+                major,
+                minor,
+                root,
+                mount_point,
+                opts,
+                optional: optional_new,
+                fstype,
+                source,
+                vfs_opts
+            };
+
+            infos.push(info);
+        } else {
+            return Err(ErrorKind::ErrorCode("failed to parse mount info file".to_string()).into())
+        }
+    }
+
+    Ok(infos)
+}
+
+pub fn ms_move_root(rootfs: &str) -> Result<bool> {
+    let mount_infos = parse_mount_table()?;
+
+    let root_path = Path::new(rootfs);
+    let abs_root_buf = root_path.absolutize()?;
+    let abs_root = abs_root_buf.to_str().ok_or::<Error>(ErrorKind::ErrorCode(
+        format!("failed to parse {} to absolute path", rootfs)
+    ).into())?;
+
+    for info in mount_infos.iter() {
+        let mount_point = Path::new(&info.mount_point);
+        let abs_mount_buf = mount_point.absolutize()?;
+        let abs_mount_point= abs_mount_buf.to_str().ok_or::<Error>(
+            ErrorKind::ErrorCode(format!("failed to parse {} to absolute path", info.mount_point)).into()
+        )?;
+        let abs_mount_point_string = String::from(abs_mount_point);
+
+        // Umount every syfs and proc file systems, except those under the container rootfs
+        if (info.fstype != "proc" && info.fstype != "sysfs") || abs_mount_point_string.starts_with(abs_root) {
+            continue
+        }
+
+        // Be sure umount events are not propagated to the host.
+        mount::mount(None::<&str>, abs_mount_point, None::<&str>, MsFlags::MS_SLAVE|MsFlags::MS_REC, None::<&str>)?;
+        match mount::umount2(abs_mount_point, MntFlags::MNT_DETACH) {
+            Ok(_) => (),
+            Err(e) => {
+                if e.ne(&nix::Error::from(Errno::EINVAL)) && e.ne(&nix::Error::from(Errno::EPERM)) {
+                    return Err(ErrorKind::ErrorCode(e.to_string()).into());
+                }
+
+                // If we have not privileges for umounting (e.g. rootless), then
+                // cover the path.
+                mount::mount(Some("tmpfs"), abs_mount_point, Some("tmpfs"), MsFlags::empty(), None::<&str>)?;
+            }
+        }
+    }
+
+    mount::mount(Some(abs_root), "/", None::<&str>, MsFlags::MS_MOVE, None::<&str>)?;
+    unistd::chroot(".")?;
+    unistd::chdir("/")?;
+
+    Ok(true)
 }
 
 fn parse_mount(m: &Mount) -> (MsFlags, String) {

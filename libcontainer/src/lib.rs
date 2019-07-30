@@ -20,7 +20,7 @@ extern crate scan_fmt;
 #[macro_use]
 extern crate regex;
 extern crate oci;
-
+extern crate path_absolutize;
 
 pub mod errors;
 pub mod container;

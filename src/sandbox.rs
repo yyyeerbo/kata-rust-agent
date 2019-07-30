@@ -51,9 +51,9 @@ impl Sandbox{
             },
             storages: HashMap::new(),
             running: false,
-            no_pivot_root: false,
+            no_pivot_root: fs_type.eq(TYPEROOTFS),
             enable_grpc_trace: false,
-            sandbox_pid_ns: fs_type  == TYPEROOTFS,
+            sandbox_pid_ns: false,
 			sender: None,
 			rtnl: Some(RtnlHandle::new(NETLINK_ROUTE, 0).unwrap()),
         })

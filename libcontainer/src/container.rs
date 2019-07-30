@@ -402,7 +402,7 @@ impl BaseContainer for LinuxContainer
 		let mut parent: u32 = 0;
 
 		let (child, cfd) = match join_namespaces(&spec,
-			to_new, &to_join, pidns, userns, p.init, self.cgroup_manager.as_ref().unwrap(), &mut parent) {
+			to_new, &to_join, pidns, userns, p.init, self.config.no_pivot_root,self.cgroup_manager.as_ref().unwrap(), &mut parent) {
 			Ok((u, v)) => (u, v),
 			Err(e) => {
 				if parent == 0 {
@@ -789,7 +789,7 @@ fn write_json(fd: RawFd, msg: &SyncPC) -> Result<()>
 	Ok(())
 }
 
-fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool, cm: &FsManager, parent: &mut u32) -> Result<(Pid, RawFd)>
+fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool, no_pivot: bool, cm: &FsManager, parent: &mut u32) -> Result<(Pid, RawFd)>
 {
 	// let ccond = Cond::new().chain_err(|| "create cond failed")?;
 	// let pcond = Cond::new().chain_err(|| "create cond failed")?;
@@ -1039,9 +1039,13 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 	}
 
 	if to_new.contains(CloneFlags::CLONE_NEWNS) {
-		// pivot root
-		mount::pivot_rootfs(rootfs)?;
 		// unistd::chroot(rootfs)?;
+		if no_pivot {
+			mount::ms_move_root(rootfs)?;
+		} else {
+			// pivot root
+			mount::pivot_rootfs(rootfs)?;
+		}
 
 		// setup sysctl
 		set_sysctls(&linux.Sysctl)?;

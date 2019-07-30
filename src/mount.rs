@@ -402,7 +402,7 @@ pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
         };
 
         if capes.len() > 1 {
-            return Ok(capes[0].to_string());
+            return Ok(capes[1].to_string());
         }
     }
 

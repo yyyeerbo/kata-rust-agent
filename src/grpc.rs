@@ -95,7 +95,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let opts = CreateOpts {
             cgroup_name: "".to_string(),
             use_systemd_cgroup: false,
-            no_pivot_root: false,
+            no_pivot_root: s.no_pivot_root,
             no_new_keyring: false,
             spec: Some(oci.clone()),
             rootless_euid: false,
