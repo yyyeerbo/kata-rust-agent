@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::path::{self, Path, PathBuf};
 use protocols::oci::{self, Spec, LinuxDevice, Mount};
 use std::os::unix;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use nix::unistd::{self, Uid, Gid};
 use nix::mount::{self, MsFlags, MntFlags};
 use nix::sys::stat::{self, Mode, SFlag};
@@ -103,15 +103,19 @@ pub fn init_rootfs(spec: &Spec, cpath: &HashMap<String, String>, mounts: &HashMa
 	
 	for m in &spec.Mounts {
 		let (mut flags, data) = parse_mount(&m);
+		if !m.destination.starts_with("/") || m.destination.contains("..") {
+			return Err(ErrorKind::Nix(nix::Error::Sys(Errno::EINVAL)).into());
+		}
 		if m.field_type == "cgroup" {
 			mount_cgroups(m, rootfs, flags, &data, cpath, mounts)?;
-		}
+		} else {
 
-		if m.destination == "/dev" {
-			flags &= !MsFlags::MS_RDONLY;
-		}
+			if m.destination == "/dev" {
+				flags &= !MsFlags::MS_RDONLY;
+			}
 
-		mount_from(&m, &rootfs, flags, &data, "")?;
+			mount_from(&m, &rootfs, flags, &data, "")?;
+		}
 	}
 
 	let olddir = unistd::getcwd()?;
@@ -138,10 +142,17 @@ fn mount_cgroups(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, cpath: &Ha
 	};
 
 	let cflags = MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV;
+	info!("tmpfs");
 	mount_from(&ctm, rootfs, cflags, "", "")?;
+	let olddir = unistd::getcwd()?;
+
+	unistd::chdir(rootfs)?;
+
+	let mut srcs: HashSet<String>= HashSet::new();
 
 	// bind mount cgroups 
 	for (key, mount) in mounts.iter() {
+		info!("{}", key);
 		let source = if cpath.get(key).is_some() {
 			cpath.get(key).unwrap()
 		} else {
@@ -154,12 +165,26 @@ fn mount_cgroups(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, cpath: &Ha
 			&mount[..]
 		};
 
-		let destination = format!("{}/{}",m.destination.as_str(), base);
+		let destination = format!("{}/{}", m.destination.as_str(), base);
+
+		if srcs.contains(source) {
+			// already mounted, xxx,yyy style cgroup
+			if key != base {
+				let src = format!("{}/{}", m.destination.as_str(), key);
+				unix::fs::symlink(destination.as_str(), &src[1..])?;
+			}
+
+			continue;
+		}
+
+		srcs.insert(source.to_string());
+
+		info!("{}", destination.as_str());
 
 		let bm = Mount {
 			source: source.to_string(),
 			field_type: "bind".to_string(),
-			destination,
+			destination: destination.clone(),
 			options: RepeatedField::default(),
 			unknown_fields: UnknownFields::default(),
 			cached_size: CachedSize::default(),
@@ -167,13 +192,26 @@ fn mount_cgroups(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, cpath: &Ha
 
 		mount_from(&bm, rootfs, flags | MsFlags::MS_REC | MsFlags::MS_BIND, "", "")?;
 
-		if flags.contains(MsFlags::MS_RDONLY) {
-			let dest = format!("{}{}", rootfs, m.destination.as_str());
-			mount::mount(Some(dest.as_str()), dest.as_str(),
-				None::<&str>,
-				flags | MsFlags::MS_BIND | MsFlags::MS_REMOUNT,
-				None::<&str>)?;
+		if key != base {
+			let src = format!("{}/{}", m.destination.as_str(), key);
+			match unix::fs::symlink(destination.as_str(), &src[1..]) {
+				Err(e) => {
+					info!("symlink: {} {} err: {}", key, destination.as_str(), e.to_string());
+					return Err(e.into());
+				}
+				Ok(_) => {}
+			}
 		}
+	}
+
+	unistd::chdir(&olddir)?;
+
+	if flags.contains(MsFlags::MS_RDONLY) {
+		let dest = format!("{}{}", rootfs, m.destination.as_str());
+		mount::mount(Some(dest.as_str()), dest.as_str(),
+			None::<&str>,
+			flags | MsFlags::MS_BIND | MsFlags::MS_REMOUNT,
+			None::<&str>)?;
 	}
 
 	Ok(())
@@ -219,9 +257,9 @@ fn mount_from(m: &Mount, rootfs: &str,
 			flags: MsFlags, data: &str,
 			_label: &str) -> Result<()> {
 	let d = String::from(data);
-	let dest = format!("{}/{}", rootfs, &m.destination);
+	let dest = format!("{}{}", rootfs, &m.destination);
 
-    let src = if m.field_type == "bind" {
+    let src = if m.field_type.as_str() == "bind" {
         let src = fs::canonicalize(m.source.as_str())?;
         let dir = if src.is_file() {
             Path::new(&dest).parent().unwrap()
@@ -229,7 +267,13 @@ fn mount_from(m: &Mount, rootfs: &str,
             Path::new(&dest)
         };
 
-        let _ = fs::create_dir_all(&dir);
+        // let _ = fs::create_dir_all(&dir);
+		match fs::create_dir_all(&dir) {
+			Ok(_) => {}
+			Err(e) => {
+				info!("creat dir {}: {}", dir.to_str().unwrap(), e.to_string());
+			}
+		}
 
         // make sure file exists so we can bind over it
         if src.is_file() {
@@ -241,7 +285,29 @@ fn mount_from(m: &Mount, rootfs: &str,
         PathBuf::from(&m.source)
     };
 
-	mount::mount(Some(src.to_str().unwrap()), dest.as_str(), Some(m.field_type.as_str()), flags, Some(d.as_str()))?;
+	info!("{}, {}", src.to_str().unwrap(), dest.as_str());
+
+	match stat::stat(src.to_str().unwrap()) {
+		Ok(_) => {}
+		Err(e) => {
+			info!("{}: {}", src.to_str().unwrap(), e.as_errno().unwrap().desc());
+		}
+	}
+
+	match stat::stat(dest.as_str()) {
+		Ok(_) => {}
+		Err(e) => {
+			info!("{}: {}", dest.as_str(), e.as_errno().unwrap().desc());
+		}
+	}
+
+	match mount::mount(Some(src.to_str().unwrap()), dest.as_str(), Some(m.field_type.as_str()), flags, Some(d.as_str())) {
+		Ok(_) => {}
+		Err(e) => {
+			info!("mount error: {}", e.as_errno().unwrap().desc());
+			return Err(e.into());
+		}
+	}
 
     if flags.contains(MsFlags::MS_BIND)
         && flags.intersects(
@@ -253,13 +319,19 @@ fn mount_from(m: &Mount, rootfs: &str,
                 | MsFlags::MS_SLAVE),
         ) {
         let chain = || format!("remount of {} failed", &dest);
-        mount::mount(
+        match mount::mount(
             Some(dest.as_str()),
             dest.as_str(),
             None::<&str>,
             flags | MsFlags::MS_REMOUNT,
             None::<&str>,
-        ).chain_err(chain)?;
+        ) {
+			Err(e) => {
+				info!("remout {}: {}", dest.as_str(), e.as_errno().unwrap().desc());
+				return Err(e.into());
+			}
+			Ok(_) => {}
+		}
     }
     Ok(())
 }
@@ -363,6 +435,9 @@ fn bind_dev(dev: &LinuxDevice) -> Result<()> {
 }
 
 pub fn finish_rootfs(spec: &Spec) -> Result<()> {
+	let olddir = unistd::getcwd()?;
+	info!("{}", olddir.to_str().unwrap());
+	unistd::chdir("/")?;
 	if spec.Linux.is_some() {
 		let linux = spec.Linux.as_ref().unwrap();
 
@@ -392,6 +467,7 @@ pub fn finish_rootfs(spec: &Spec) -> Result<()> {
 		mount::mount(Some("/"), "/", None::<&str>, flags, None::<&str>)?;
 	}
 	stat::umask(Mode::from_bits_truncate(0o022));
+	unistd::chdir(&olddir)?;
 
 	Ok(())
 }
@@ -401,11 +477,23 @@ fn mask_path(path: &str) -> Result<()> {
 		return Err(nix::Error::Sys(Errno::EINVAL).into());
 	}
 
-	if let Err(nix::Error::Sys(e)) = mount::mount(Some("/dev/null"),
+	info!("{}", path);
+
+	match mount::mount(Some("/dev/null"),
 			path, None::<&str>, MsFlags::MS_BIND, None::<&str>) {
-		if e != Errno::ENOENT && e != Errno::ENOTDIR {
-			return Err(nix::Error::Sys(e).into());
+		Err(nix::Error::Sys(e)) => {
+			if e != Errno::ENOENT && e != Errno::ENOTDIR {
+				info!("{}: {}", path, e.desc());
+				return Err(nix::Error::Sys(e).into());
+			}
 		}
+
+		Err(e) => {
+			info!("{}: {}", path, e.as_errno().unwrap().desc());
+			return Err(e.into());
+		}
+
+		Ok(_) => {}
 	}
 
 	Ok(())
@@ -416,11 +504,27 @@ fn readonly_path(path: &str) -> Result<()> {
 		return Err(nix::Error::Sys(Errno::EINVAL).into());
 	}
 
-	if let Err(nix::Error::Sys(Errno::ENOENT)) = mount::mount(
+	info!("{}", path);
+
+	match mount::mount(
 			Some(&path[1..]), path,
 			None::<&str>, MsFlags::MS_BIND | MsFlags::MS_REC,
 			None::<&str>) {
-		return Ok(())
+		Err(nix::Error::Sys(e)) => {
+			if e == Errno::ENOENT {
+				return Ok(());
+			} else {
+				info!("{}: {}", path, e.desc());
+				return Err(nix::Error::Sys(e).into());
+			}
+		}
+
+		Err(e) => {
+			info!("{}: {}", path, e.as_errno().unwrap().desc());
+			return Err(e.into());
+		}
+
+		Ok(_) => {}
 	}
 
 	mount::mount(Some(&path[1..]), &path[1..], None::<&str>,

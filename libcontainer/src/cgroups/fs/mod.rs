@@ -227,7 +227,7 @@ pub const CGROUP_PROCS: &'static str = "cgroup.procs";
 pub const CPU_RT_PERIOD_US: &'static str = "cpu.rt_period_us";
 pub const CPU_RT_RUNTIME_US: &'static str = "cpu.rt_runtime_us";
 pub const CPU_SHARES: &'static str = "cpu.shares";
-pub const CPU_CFS_QUOTA_US: &'static str = "cpu.cfs_quato_us";
+pub const CPU_CFS_QUOTA_US: &'static str = "cpu.cfs_quota_us";
 pub const CPU_CFS_PERIOD_US: &'static str = "cpu.cfs_period_us";
 pub const DEVICES_ALLOW: &'static str = "devices.allow";
 pub const DEVICES_DENY: &'static str = "devices.deny";
@@ -236,7 +236,7 @@ pub const MEMORY_SOFT_LIMIT: &'static str = "memory.soft_limit_in_bytes";
 pub const MEMSW_LIMIT: &'static str = "memory.memsw.limit_in_bytes";
 pub const KMEM_LIMIT: &'static str = "memory.kmem.limit_in_bytes";
 pub const KMEM_TCP_LIMIT: &'static str = "memory.kmem.tcp.limit_in_bytes";
-pub const SWAPINESS: &'static str = "memory.swapiness";
+pub const SWAPPINESS: &'static str = "memory.swappiness";
 pub const OOM_CONTROL: &'static str = "memory.oom_control";
 pub const PIDS_MAX: &'static str = "pids.max";
 pub const BLKIO_WEIGHT: &'static str = "blkio.weight";
@@ -297,6 +297,7 @@ fn write_file<T>(dir: &str, file: &str, v: T) -> Result<()>
 where T: ToString
 {
 	let p = format!("{}/{}", dir, file);
+	info!("{}", p.as_str());
 	fs::write(p.as_str(), v.to_string().as_bytes())?;
 	Ok(())
 }
@@ -316,24 +317,25 @@ fn copy_parent(dir: &str, file: &str) -> Result<()> {
 		return Err(ErrorKind::ErrorCode("cannot copy file from parent".to_string()).into());
 	};
 
-	match stat::stat(p.as_str()) {
-		Ok(_) => return Ok(()),
-		Err(nix::Error::Sys(Errno::ENOENT)) => {
-			match read_file(parent, file) {
-				Ok(v) => write_file(dir, file, v),
-				Err(Error(ErrorKind::Io(e), _)) => {
-					if e.kind() == std::io::ErrorKind::NotFound {
-						copy_parent(parent, file)?;
-						return copy_parent(dir, file);
-					}
-					return Err(ErrorKind::Io(e).into());
-				}
-				Err(e) => return Err(e.into()),
+	match read_file(parent, file) {
+		Ok(v) => {
+			if !v.trim().is_empty() {
+				info!("value: \"{}\"", v.as_str().trim());
+				return write_file(dir, file, v);
+			} else {
+				copy_parent(parent, file)?;
+				return copy_parent(dir, file);
 			}
+		}
+		Err(Error(ErrorKind::Io(e), _)) => {
+			if e.kind() == std::io::ErrorKind::NotFound {
+				copy_parent(parent, file)?;
+				return copy_parent(dir, file);
+			}
+			return Err(ErrorKind::Io(e).into());
 		}
 		Err(e) => return Err(e.into()),
 	}
-
 }
 
 fn write_nonzero(dir: &str, file: &str, v: i128) -> Result<()> {
@@ -398,15 +400,16 @@ impl Subsystem for CpuSet {
 
 		// for the first time
 
-		if cpus.is_empty() {
+		if !update {
 			copy_parent(dir, CPUSET_CPUS)?;
-		} else {
+			copy_parent(dir, CPUSET_MEMS)?;
+		}
+
+		if !cpus.is_empty() {
 			write_file(dir, CPUSET_CPUS, cpus)?;
 		}
 
-		if mems.is_empty() {
-			copy_parent(dir, CPUSET_MEMS)?;
-		} else {
+		if !mems.is_empty() {
 			write_file(dir, CPUSET_MEMS, mems)?;
 		}
 
@@ -516,9 +519,13 @@ fn get_cpuacct_percpu_usage(dir: &str) -> Result<Vec<u64>> {
 fn get_percpu_usage(dir: &str, file: &str) -> Result<Vec<u64>> {
 	let mut m = Vec::new();
 	let p = format!("{}/{}", dir, file);
+	info!("{}", p.as_str());
 
 	for n in fs::read_to_string(p.as_str())?.split(' ') {
-		m.push(n.trim().parse::<u64>()?);
+		info!("{}", n);
+		if !n.trim().is_empty() {
+			m.push(n.trim().parse::<u64>()?);
+		}
 	}
 
 	Ok(m)
@@ -531,9 +538,13 @@ impl CpuAcct {
 		let usage_in_usermode = (((*h.get("user").unwrap() * NANO_PER_SECOND) as f64) / *CLOCK_TICKS) as u64;
 		let usage_in_kernelmode = (((*h.get("system").unwrap() * NANO_PER_SECOND) as f64) / *CLOCK_TICKS) as u64;
 
+		info!("stat");
+
 		let total_usage = get_param_u64(dir, CPUACCT_USAGE)?;
+		info!("usage");
 
 		let percpu_usage = get_percpu_usage(dir, CPUACCT_PERCPU)?;
+		info!("percpu");
 
 		Ok(CpuUsage {
 			total_usage,
@@ -565,8 +576,16 @@ fn write_device(d: &LinuxDeviceCgroup, dir: &str) -> Result<()> {
 		d.Minor.to_string()
 	};
 
-	let v = format!("{} {}:{} {}", d.Type.as_str(),
+	let t = if d.Type.is_empty() {
+		"a"
+	} else {
+		d.Type.as_str()
+	};
+
+	let v = format!("{} {}:{} {}", t,
 				major.as_str(), minor.as_str(), d.Access.as_str());
+
+	info!("{}", v.as_str());
 	
 	write_file(dir, file, v.as_str())
 }
@@ -604,6 +623,25 @@ impl Subsystem for Devices {
 	}
 }
 
+fn try_write<T>(dir: &str, file: &str, v: T) -> Result<()>
+where T: ToString
+{
+	match write_file(dir, file, v) {
+		Err(Error(ErrorKind::Io(e), _)) => {
+			if e.kind() != std::io::ErrorKind::PermissionDenied &&
+				e.kind() != std::io::ErrorKind::Other {
+					return Err(ErrorKind::Io(e).into());
+			}
+
+			return Ok(())
+		}
+
+		Err(e) => return Err(e.into()),
+
+		Ok(_) => return Ok(()),
+	}
+}
+
 impl Subsystem for Memory {
 	fn name(&self) -> String {
 		"memory".to_string()
@@ -617,8 +655,8 @@ impl Subsystem for Memory {
 		let memory = r.Memory.as_ref().unwrap();
 		// initialize kmem limits for accounting
 		if !update {
-			write_file(dir, KMEM_LIMIT, 1)?;
-			write_file(dir, KMEM_LIMIT, -1)?;
+			try_write(dir, KMEM_LIMIT, 1)?;
+			try_write(dir, KMEM_LIMIT, -1)?;
 		}
 
 		write_nonzero(dir, MEMORY_LIMIT, memory.Limit as i128)?;
@@ -630,7 +668,7 @@ impl Subsystem for Memory {
 		write_nonzero(dir, KMEM_TCP_LIMIT, memory.KernelTCP as i128)?;
 
 		if memory.Swappiness >= 0 && memory.Swappiness < 100 {
-			write_file(dir, SWAPINESS, memory.Swappiness)?;
+			write_file(dir, SWAPPINESS, memory.Swappiness)?;
 		}
 
 		if memory.DisableOOMKiller {
@@ -639,6 +677,24 @@ impl Subsystem for Memory {
 
 		Ok(())
 	}
+}
+
+fn get_exist_memory_data(dir: &str, sub: &str) -> Result<Option<MemoryData>> {
+	let res = match get_memory_data(dir, sub) {
+		Err(Error(ErrorKind::Io(e), _)) => {
+			if e.kind() == std::io::ErrorKind::NotFound {
+				None
+			} else {
+				return Err(ErrorKind::Io(e).into());
+			}
+		}
+
+		Ok(r) => Some(r),
+
+		Err(e) => return Err(e.into()),
+	};
+
+	Ok(res)
 }
 
 fn get_memory_data(dir: &str, sub: &str) -> Result<MemoryData> {
@@ -674,6 +730,7 @@ impl Memory {
 	fn get_stats(&self, dir: &str) -> Result<MemoryStats> {
 		let h = get_param_key_u64(dir, MEMORY_STAT)?;
 		let cache = *h.get("cache").unwrap();
+		info!("cache");
 
 		let value = get_param_u64(dir, MEM_HIERARCHY)?;
 		let use_hierarchy = if value == 1 {
@@ -682,10 +739,12 @@ impl Memory {
 			false
 		};
 
+		info!("hierarchy");
+
 		// gte memory datas
-		let usage = SingularPtrField::some(get_memory_data(dir, "")?);
-		let swap_usage = SingularPtrField::some(get_memory_data(dir, "memsw")?);
-		let kernel_usage = SingularPtrField::some(get_memory_data(dir, "kmem")?);
+		let usage = SingularPtrField::from_option(get_exist_memory_data(dir, "")?);
+		let swap_usage = SingularPtrField::from_option(get_exist_memory_data(dir, "memsw")?);
+		let kernel_usage = SingularPtrField::from_option(get_exist_memory_data(dir, "kmem")?);
 
 		Ok(MemoryStats {
 			cache,
@@ -763,6 +822,28 @@ fn rate(d: &LinuxThrottleDevice) -> String {
 	format!("{}:{} {}", d.Major, d.Minor, d.Rate)
 }
 
+fn write_blkio_device<T: ToString>(dir: &str, file: &str, v: T) -> Result<()> {
+	match write_file(dir, file, v) {
+		Err(Error(ErrorKind::Io(e), _)) => {
+			// only ignore ENODEV
+			if e.kind() == std::io::ErrorKind::Other {
+				let raw = std::io::Error::last_os_error().raw_os_error().unwrap();
+				if Errno::from_i32(raw) == Errno::ENODEV {
+					return Ok(());
+				}
+			}
+
+			return Err(ErrorKind::Io(e).into());
+		}
+
+		Err(e) => return Err(e.into()),
+
+		Ok(_) => {}
+	}
+
+	Ok(())
+}
+
 impl Subsystem for Blkio {
 	fn name(&self) -> String {
 		"blkio".to_string()
@@ -780,24 +861,24 @@ impl Subsystem for Blkio {
 
 		for d in blkio.WeightDevice.iter() {
 			let (w, lw) = weight(d);
-			write_file(dir, BLKIO_WEIGHT_DEVICE, w)?;
-			write_file(dir, BLKIO_LEAF_WEIGHT_DEVICE, lw)?;
+			write_blkio_device(dir, BLKIO_WEIGHT_DEVICE, w)?;
+			write_blkio_device(dir, BLKIO_LEAF_WEIGHT_DEVICE, lw)?;
 		}
 
 		for d in blkio.ThrottleReadBpsDevice.iter() {
-			write_file(dir, BLKIO_READ_BPS_DEVICE, rate(d))?;
+			write_blkio_device(dir, BLKIO_READ_BPS_DEVICE, rate(d))?;
 		}
 
 		for d in blkio.ThrottleWriteBpsDevice.iter() {
-			write_file(dir, BLKIO_WRITE_BPS_DEVICE, rate(d))?;
+			write_blkio_device(dir, BLKIO_WRITE_BPS_DEVICE, rate(d))?;
 		}
 
 		for d in blkio.ThrottleReadIOPSDevice.iter() {
-			write_file(dir, BLKIO_READ_IOPS_DEVICE, rate(d))?;
+			write_blkio_device(dir, BLKIO_READ_IOPS_DEVICE, rate(d))?;
 		}
 
 		for d in blkio.ThrottleWriteIOPSDevice.iter() {
-			write_file(dir, BLKIO_WRITE_IOPS_DEVICE, rate(d))?;
+			write_blkio_device(dir, BLKIO_WRITE_IOPS_DEVICE, rate(d))?;
 		}
 
 		Ok(())
@@ -1115,8 +1196,9 @@ pub const FROZEN: &'static str = "FROZEN";
 
 impl CgroupManager for Manager {
 	fn apply(&self, pid: pid_t) -> Result<()> {
-		for (_, value) in &self.paths {
-			apply(value, pid)?
+		for (key, value) in &self.paths {
+			info!("apply cgroup {}", key);
+			apply(value, pid)?;
 		}
 
 		Ok(())
@@ -1126,6 +1208,7 @@ impl CgroupManager for Manager {
 		for (key, value) in &self.paths {
 			let _ = fs::create_dir_all(value);
 			let sub = get_subsystem(key)?;
+			info!("setting cgroup {}", key);
 			sub.set(value, spec, update)?;
 		}
 
@@ -1134,18 +1217,21 @@ impl CgroupManager for Manager {
 
 	fn get_stats(&self) -> Result<CgroupStats> {
 		// CpuStats
+		info!("cpu_usage");
 		let cpu_usage = if self.paths.get("cpuacct").is_some() {
 			SingularPtrField::some(CpuAcct ().get_stats(self.paths.get("cpuacct").unwrap())?)
 		} else {
 			SingularPtrField::none()
 		};
 
+		info!("throttling_data");
 		let throttling_data = if self.paths.get("cpu").is_some() {
 			SingularPtrField::some(Cpu ().get_stats(self.paths.get("cpu").unwrap())?)
 		} else {
 			SingularPtrField::none()
 		};
 
+		info!("cpu_stats");
 		let cpu_stats = if cpu_usage.is_none() && throttling_data.is_none() {
 			SingularPtrField::none()
 		} else {
@@ -1158,6 +1244,7 @@ impl CgroupManager for Manager {
 		};
 
 		// Memorystats
+		info!("memory_stats");
 		let memory_stats = if self.paths.get("memory").is_some() {
 			SingularPtrField::some(Memory ().get_stats(self.paths.get("memory").unwrap())?)
 		} else {
@@ -1165,6 +1252,7 @@ impl CgroupManager for Manager {
 		};
 
 		// PidsStats
+		info!("pids_stats");
 		let pids_stats = if self.paths.get("pids").is_some() {
 			SingularPtrField::some(Pids ().get_stats(self.paths.get("pids").unwrap())?)
 		} else {
@@ -1172,6 +1260,7 @@ impl CgroupManager for Manager {
 		};
 
 		// BlkioStats
+		info!("blkio_stats");
 		let blkio_stats = if self.paths.get("blkio").is_some() {
 			SingularPtrField::some(Blkio ().get_stats(self.paths.get("blkio").unwrap())?)
 		} else {
@@ -1179,6 +1268,7 @@ impl CgroupManager for Manager {
 		};
 
 		// HugetlbStats
+		info!("hugetlb_stats");
 		let hugetlb_stats = if self.paths.get("hugetlb").is_some() {
 			HugeTLB ().get_stats(self.paths.get("hugetlb").unwrap())?
 		} else {

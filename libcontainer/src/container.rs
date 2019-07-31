@@ -507,6 +507,7 @@ impl BaseContainer for LinuxContainer
 		setup_stdio(&p)?;
 
 		if to_new.contains(CloneFlags::CLONE_NEWNS) {
+			info!("finish rootfs!");
 			mount::finish_rootfs(spec)?;
 		}
 
@@ -516,6 +517,7 @@ impl BaseContainer for LinuxContainer
 		}
 
 		// setup uid/gid
+		info!("{:?}", p.oci.clone());
 
 		if p.oci.User.is_some() {
 			let guser = p.oci.User.as_ref().unwrap();
@@ -539,6 +541,7 @@ impl BaseContainer for LinuxContainer
 
 		if p.oci.Capabilities.is_some() {
 			let c = p.oci.Capabilities.as_ref().unwrap();
+			info!("drop capabilities!");
 			capabilities::drop_priviledges(c)?;
 		}
 
@@ -815,6 +818,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			// apply cgroups
 			if init {
 				if res.is_some() {
+					info!("apply cgroups!");
 					cm.set(res.unwrap(), false)?;
 				}
 			}

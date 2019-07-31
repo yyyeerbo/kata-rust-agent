@@ -76,6 +76,8 @@ impl protocols::agent_grpc::AgentService for agentService {
 
 		// re-scan PCI bus
 		// looking for hidden devices
+
+/*
 		match rescan_pci_bus() {
 			Ok(_) => (),
 			Err(e) => {
@@ -89,6 +91,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 				return;
 			}
 		};
+*/
 
         update_container_namespaces(&s, oci);
 
@@ -455,7 +458,7 @@ impl protocols::agent_grpc::AgentService for agentService {
     ) {
 		let cid = req.container_id.clone();
 		let format = req.format.clone();
-		let mut args  = req.args.to_vec();
+		let mut args  = req.args.clone().into_vec();
 		let mut resp = ListProcessesResponse::new();
 
 		let s = Arc::clone(&self.sandbox);
@@ -514,10 +517,19 @@ impl protocols::agent_grpc::AgentService for agentService {
 
 		lines.remove(0);
 		for line in &lines {
+			if line.trim().is_empty() {
+				continue;
+			}
+
 			let fields: Vec<String> = line
 				.split_whitespace()
 				.map(|v| v.to_string())
 				.collect();
+
+			if fields.len() < pid_index + 1 {
+				warn!("corrupted output?");
+				continue;
+			}
 			let pid = fields[pid_index].trim().parse::<i32>().unwrap();
 
 			for p in &pids {
@@ -539,6 +551,35 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::UpdateContainerRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+		let cid = req.container_id.clone();
+		let res = req.resources.clone();
+
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		let ctr = sandbox.get_container(cid.as_str()).unwrap();
+
+		let resp = Empty::new();
+
+		if res.is_some() {
+			match ctr.set(res.unwrap()) {
+				Err(e) => {
+					let f = sink.fail(RpcStatus::new(
+						RpcStatusCode::Internal,
+						Some("internal error".to_string())))
+						.map_err(|_e| error!("internal error!"));
+					ctx.spawn(f);
+					return;
+				}
+
+				Ok(()) => {}
+			}
+		}
+
+		let f = sink.success(resp)
+			.map_err(|_e| error!("update container failed!"));
+
+		ctx.spawn(f);
     }
     fn stats_container(
         &mut self,
@@ -546,6 +587,28 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::StatsContainerRequest,
         sink: ::grpcio::UnarySink<protocols::agent::StatsContainerResponse>,
     ) {
+		let cid = req.container_id.clone();
+		let s = Arc::clone(&self.sandbox);
+		let mut sandbox = s.lock().unwrap();
+
+		let ctr = sandbox.get_container(cid.as_str()).unwrap();
+
+		let resp = match ctr.stats() {
+			Err(e) => {
+				let f = sink.fail(RpcStatus::new(
+					RpcStatusCode::Internal,
+					Some("internal error!".to_string())))
+					.map_err(|_e| error!("internal error!"));
+				ctx.spawn(f);
+				return;
+			}
+
+			Ok(r) => r,
+		};
+
+		let f = sink.success(resp)
+				.map_err(|_e| error!("stats containers failed!"));
+		ctx.spawn(f);
     }
     fn pause_container(
         &mut self,

@@ -56,6 +56,7 @@ lazy_static! {
 
 fn main() {
     simple_logging::log_to_stderr(LevelFilter::Info);
+	// simple_logging::log_to_file("/run/log.agent", LevelFilter::Info);
     env::set_var("RUST_BACKTRACE", "full");
 
     // Initialize unique sandbox structure.
@@ -70,7 +71,11 @@ fn main() {
     //vsock:///dev/vsock, port
     let mut server = grpc::start(sandbox.clone(), VSOCK_ADDR, VSOCK_PORT);
 
-//    let mut server = grpc::start(sandbox.clone(), "unix:///tmp/testagent", 1);
+/*
+    let _ = fs::remove_file("/tmp/testagent");
+	let _ = fs::remove_dir_all("/run/agent");
+    let mut server = grpc::start(sandbox.clone(), "unix:///tmp/testagent", 1);
+*/
 
     let handle = thread::spawn(move || {
         // info!("Press ENTER to exit...");
