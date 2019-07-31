@@ -261,7 +261,7 @@ fn parse_mount_table() -> Result<Vec<Info>> {
           ) = scan_fmt!(&line, MOUNTINFOFORMAT,
                 i32, i32, i32, i32, String, String, String, String)?;
 
-        let fields: Vec<&str> = line.split("-").collect();
+        let fields: Vec<&str> = line.split(" - ").collect();
         if fields.len() == 2 {
            let (fstype, source, vfs_opts) = scan_fmt!(fields[1], "{} {} {}", String, String, String)?;
 
