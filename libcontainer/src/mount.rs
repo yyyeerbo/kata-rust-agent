@@ -294,6 +294,7 @@ fn parse_mount_table() -> Result<Vec<Info>> {
 }
 
 pub fn ms_move_root(rootfs: &str) -> Result<bool> {
+    unistd::chdir(rootfs)?;
     let mount_infos = parse_mount_table()?;
 
     let root_path = Path::new(rootfs);
