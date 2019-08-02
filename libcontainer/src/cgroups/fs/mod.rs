@@ -1150,11 +1150,6 @@ fn get_mounts() -> Result<HashMap<String, String>> {
 		let pre: Vec<&str> = p[0].split(' ').collect();
 		let post: Vec<&str> = p[1].split(' ').collect();
 
-		if pre.len() != 7 {
-			warn!("mountinfo corrupted!");
-			continue;
-		}
-
 		if post.len() != 3 {
 			warn!("mountinfo corrupted!");
 			continue;
