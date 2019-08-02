@@ -400,12 +400,16 @@ fn mount_from(m: &Mount, rootfs: &str,
 
 	info!("{}, {}", src.to_str().unwrap(), dest.as_str());
 
+// ignore this check since some mount's src didn't been a directory
+// such as tmpfs.
+/*
 	match stat::stat(src.to_str().unwrap()) {
 		Ok(_) => {}
 		Err(e) => {
 			info!("{}: {}", src.to_str().unwrap(), e.as_errno().unwrap().desc());
 		}
 	}
+*/
 
 	match stat::stat(dest.as_str()) {
 		Ok(_) => {}
