@@ -1,5 +1,6 @@
 //extern crate oci;
 //extern crate libcontainer;
+#![feature(map_get_key_value)]
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -49,7 +50,7 @@ use namespace::Namespace;
 use network::Network;
 use sandbox::Sandbox;
 use uevent::watch_uevents;
-use mount::general_mount;
+use mount::{general_mount, cgroups_mount};
 
 mod grpc;
 
@@ -171,6 +172,7 @@ fn setup_signal_handler() -> Result<(), String>{
 // when this agent has been run as the init process.
 fn init_agent_as_init() -> Result<()> {
     general_mount()?;
+    cgroups_mount()?;
 
     fs::remove_file(Path::new("/dev/ptmx"))?;
     fs::soft_link(Path::new("/dev/pts/ptmx"), Path::new("/dev/ptmx"))?;

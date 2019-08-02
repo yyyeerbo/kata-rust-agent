@@ -22,7 +22,7 @@ use regex::Regex;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-use crate::device::get_pci_device_name;
+use crate::device::{get_pci_device_name, online_device};
 use crate::protocols::agent::Storage;
 use crate::Sandbox;
 
@@ -38,6 +38,9 @@ pub const TYPEROOTFS: &'static str   = "rootfs";
 pub const PROCMOUNTSTATS: &'static str = "/proc/self/mountstats";
 
 const ROOTBUSPATH: &'static str = "/devices/pci0000:00";
+
+const CGROUPPATH: &'static str = "/sys/fs/cgroup";
+const PROCCGROUPS: &'static str = "/proc/cgroups";
 
 pub const TIMEOUT_HOTPLUG: u64 = 3;
 
@@ -87,6 +90,27 @@ pub struct INIT_MOUNT {
     src: &'static str,
     dest: &'static str,
     options: Vec<&'static str>
+}
+
+#[cfg_attr(rustfmt, rustfmt_skip)]
+lazy_static!{
+    static ref CGROUPS: HashMap<&'static str, &'static str> = {
+        let mut m = HashMap::new();
+        m.insert("cpu", "/sys/fs/cgroup/cpu");
+        m.insert("cpuacct", "/sys/fs/cgroup/cpuacct");
+        m.insert("blkio", "/sys/fs/cgroup/blkio");
+        m.insert("cpuset", "/sys/fs/cgroup/cpuset");
+        m.insert("memory", "/sys/fs/cgroup/memory");
+        m.insert("devices", "/sys/fs/cgroup/devices");
+        m.insert("freezer", "/sys/fs/cgroup/freezer");
+        m.insert("net_cls", "/sys/fs/cgroup/net_cls");
+        m.insert("perf_event", "/sys/fs/cgroup/perf_event");
+        m.insert("net_prio", "/sys/fs/cgroup/net_prio");
+        m.insert("hugetlb", "/sys/fs/cgroup/hugetlb");
+        m.insert("pids", "/sys/fs/cgroup/pids");
+        m.insert("rdma", "/sys/fs/cgroup/rdma");
+        m
+    };
 }
 
 #[cfg_attr(rustfmt, rustfmt_skip)]
@@ -354,28 +378,34 @@ pub fn add_storages(storages: Vec<Storage>, sandbox: Arc<Mutex<Sandbox>>) -> Res
     Ok(mount_list)
 }
 
+fn mount_to_rootfs(m: &INIT_MOUNT) -> Result<()> {
+    let options_vec: Vec<&str> = m.options.clone();
+
+    let (flags, options) = parse_mount_flags_and_options(options_vec);
+
+    let bare_mount = BareMount::new(
+        m.src,
+        m.dest,
+        m.fstype,
+        flags,
+        options.as_str(),
+    );
+
+    fs::create_dir_all(Path::new(m.dest)).chain_err(|| "could not creat directory")?;
+
+    if let Err(err) = bare_mount.mount() {
+        if m.src != "dev" {
+            return Err(err.into());
+        }
+        error!("Could not mount filesystem from {} to {}", m.src, m.dest);
+    }
+
+    Ok(())
+}
+
 pub fn general_mount() -> Result<()> {
     for m in INIT_ROOTFS_MOUNTS.iter() {
-        let options_vec: Vec<&str> = m.options.clone();
-
-        let (flags, options) = parse_mount_flags_and_options(options_vec);
-
-        let bare_mount = BareMount::new(
-            m.src,
-            m.dest,
-            m.fstype,
-            flags,
-            options.as_str(),
-        );
-
-        fs::create_dir_all(Path::new(m.dest)).chain_err(|| "could not creat directory")?;
-
-        if let Err(err) = bare_mount.mount() {
-            if m.src != "dev" {
-                return Err(err.into());
-            }
-            error!("Could not mount filesystem from {} to {}", m.src, m.dest);
-        }
+        mount_to_rootfs(m)?;
     }
 
     Ok(())
@@ -408,3 +438,71 @@ pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
 
     Err(ErrorKind::ErrorCode(format!("failed to find FS type for mount point {}", mount_point)).into())
 }
+
+pub fn get_cgroup_mounts(cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
+    let file = File::open(&cg_path)?;
+    let reader = BufReader::new(file);
+
+    let mut has_device_cgroup = false;
+    let mut cg_mounts: Vec<INIT_MOUNT> = vec![INIT_MOUNT {
+        fstype: "tmpfs",
+        src: "tmpfs",
+        dest: CGROUPPATH,
+        options: vec!["nosuid", "nodev", "noexec", "mode=755"]
+    }];
+
+    for (_, line) in reader.lines().enumerate() {
+        let line = line?;
+
+        let fields: Vec<&str> = line.split("\t").collect();
+        // #subsys_name    hierarchy       num_cgroups     enabled
+        // fields[0]       fields[1]       fields[2]       fields[3]
+        match CGROUPS.get_key_value(fields[0]){
+            Some((key, value)) => {
+                if *key == "" || key.starts_with("#") || (fields.len() > 3 && fields[3] == "0") {
+                    continue;
+                }
+
+                if *key == "devices" {
+                    has_device_cgroup = true;
+                }
+
+                cg_mounts.push(INIT_MOUNT {
+                    fstype: "cgroup",
+                    src: "cgroup",
+                    dest: *value,
+                    options: vec!["nosuid", "nodev", "noexec", "relatime", *key]
+                });
+            }
+            None => continue
+        }
+    };
+
+    if !has_device_cgroup {
+        warn!("The system didn't support device cgroup, which is dangerous, thus agent initialized without cgroup support!\n");
+        return Ok(Vec::new());
+    }
+
+    cg_mounts.push(INIT_MOUNT {
+        fstype: "tmpfs",
+        src: "tmpfs",
+        dest: CGROUPPATH,
+        options: vec!["remount", "ro", "nosuid", "nodev", "noexec", "mode=755"]
+    });
+
+    Ok(cg_mounts)
+}
+
+pub fn cgroups_mount() -> Result<()> {
+   let cgroups = get_cgroup_mounts(PROCCGROUPS)?;
+
+    for cg in cgroups.iter() {
+        mount_to_rootfs(cg)?;
+    }
+
+    // Enable memory hierarchical account.
+    // For more information see https://www.kernel.org/doc/Documentation/cgroup-v1/memory.txt
+    online_device("/sys/fs/cgroup/memory//memory.use_hierarchy")?;
+    Ok(())
+}
+
