@@ -1419,6 +1419,7 @@ impl Manager {
 				continue;
 			}
 
+			dir.push('/');
 			dir.push_str(d);
 			write_file(dir.as_str(), CPUSET_CPUS, cpuset)?;
 		}
@@ -1428,6 +1429,7 @@ impl Manager {
 				continue;
 			}
 
+			dir.push('/');
 			dir.push_str(d);
 			write_file(dir.as_str(), CPUSET_CPUS, cpuset)?;
 		}
