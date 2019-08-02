@@ -15,6 +15,7 @@ use protocols::agent::{WriteStreamResponse, ReadStreamResponse, GuestDetailsResp
 use protocols::health::{HealthCheckResponse_ServingStatus, HealthCheckResponse};
 use protobuf::{RepeatedField, SingularPtrField};
 use protocols::oci::{self, Spec, Linux, LinuxNamespace};
+use protocols::agent::{CopyFileRequest};
 
 use std::collections::HashMap;
 
@@ -31,6 +32,7 @@ use crate::version::{AGENT_VERSION, API_VERSION};
 use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
 use crate::namespace::{NSTYPEIPC, NSTYPEUTS, NSTYPEPID};
 use crate::device::rescan_pci_bus;
+use crate::random;
 
 use std::fs;
 use libc::{self, pid_t, TIOCSWINSZ, winsize, c_ushort};
@@ -41,8 +43,11 @@ use std::thread;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader};
+use std::os::unix::fs::FileExt;
+use std::path::PathBuf;
+use nix::unistd::{Uid, Gid};
 
 const SYSFS_MEMORY_BLOCK_SIZE_PATH: &'static str = "/sys/devices/system/memory/block_size_bytes";
 const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memory/probe";
@@ -76,6 +81,8 @@ impl protocols::agent_grpc::AgentService for agentService {
 
 		// re-scan PCI bus
 		// looking for hidden devices
+
+
 		match rescan_pci_bus().chain_err(|| "Could not rescan PCI bus") {
 			Ok(_) => (),
 			Err(e) => {
@@ -91,6 +98,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 		};
 
         update_container_namespaces(&s, oci);
+
 
         let opts = CreateOpts {
             cgroup_name: "".to_string(),
@@ -1142,10 +1150,25 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::OnlineCPUMemRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
+		// sleep 5 seconds for debug
+		// thread::sleep(Duration::new(5, 0));
+		let s = Arc::clone(&self.sandbox);
+		let sandbox = s.lock().unwrap();
         let empty = protocols::empty::Empty::new();
+
+		if let Err(e) = sandbox.online_cpu_memory(&req) {
+			let f = sink.fail(RpcStatus::new(
+				RpcStatusCode::Internal,
+				Some("Internal error".to_string())))
+				.map_err(|_e| error!("cannot online memory/cpu"));
+			ctx.spawn(f);
+			return;
+		} 
+
         let f = sink
             .success(empty)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+
         ctx.spawn(f)
     }
     fn reseed_random_dev(
@@ -1155,6 +1178,15 @@ impl protocols::agent_grpc::AgentService for agentService {
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
         let empty = protocols::empty::Empty::new();
+		if let Err(e) = random::reseed_rng(req.data.as_slice()) {
+			let f = sink.fail(RpcStatus::new(
+				RpcStatusCode::Internal,
+				Some("Internal error".to_string())))
+				.map_err(|_e| error!("fail to reseed rng!"));
+			ctx.spawn(f);
+			return;
+		}
+
         let f = sink
             .success(empty)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
@@ -1202,6 +1234,16 @@ impl protocols::agent_grpc::AgentService for agentService {
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
         let empty = protocols::empty::Empty::new();
+
+		if let Err(e) = do_mem_hotplug_by_probe(&req.memHotplugProbeAddr) {
+			let f = sink.fail(RpcStatus::new(
+				RpcStatusCode::Internal,
+				Some("internal error!".to_string())))
+				.map_err(|_e| error!("cannont mem hotplug by probe!"));
+			ctx.spawn(f);
+			return;
+		}
+
         let f = sink
             .success(empty)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
@@ -1214,6 +1256,15 @@ impl protocols::agent_grpc::AgentService for agentService {
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
         let empty = protocols::empty::Empty::new();
+		if let Err(e) = do_set_guest_date_time(req.Sec, req.Usec) {
+			let f = sink.fail(RpcStatus::new(
+				RpcStatusCode::Internal,
+				Some("internal error!".to_string())))
+				.map_err(|_e| error!("cannot set guest time!"));
+			ctx.spawn(f);
+			return;
+		}
+
         let f = sink
             .success(empty)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
@@ -1226,6 +1277,15 @@ impl protocols::agent_grpc::AgentService for agentService {
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
         let empty = protocols::empty::Empty::new();
+		if let Err(e) = do_copy_file(&req) {
+			let f = sink.fail(RpcStatus::new(
+				RpcStatusCode::Internal,
+				Some("Internal error!".to_string())))
+				.map_err(|_e| error!("cannot copy file!"));
+			ctx.spawn(f);
+			return;
+		}
+
         let f = sink
             .success(empty)
             .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
@@ -1509,4 +1569,76 @@ fn is_signal_handled(pid: pid_t, signum: u32) -> bool {
 		}
 	}
 	false
+}
+
+fn do_mem_hotplug_by_probe(addrs: &Vec<u64>) -> Result<()> {
+	for addr in addrs.iter() {
+		fs::write(SYSFS_MEMORY_HOTPLUG_PROBE_PATH, format!("{:#X}", *addr))?;
+	}
+	Ok(())
+}
+
+fn do_set_guest_date_time(sec: i64, usec: i64) -> Result<()> {
+	let tv = libc::timeval {
+		tv_sec: sec,
+		tv_usec: usec,
+	};
+
+	let ret = unsafe { libc::settimeofday(&tv as *const libc::timeval,
+		0 as *const libc::timezone) };
+	
+	Errno::result(ret).map(drop)?;
+
+	Ok(())
+}
+
+fn do_copy_file(req: &CopyFileRequest) -> Result<()> {
+	let path = fs::canonicalize(req.path.as_str())?;
+
+	if !path.starts_with(CONTAINER_BASE) {
+		return Err(nix::Error::Sys(Errno::EINVAL).into());
+	}
+
+	let parent = path.parent();
+
+	let dir = if parent.is_some() {
+		parent.unwrap().to_path_buf()
+	} else {
+		PathBuf::from("/")
+	};
+
+	if let Err(e) = fs::create_dir_all(dir.to_str().unwrap()) {
+		if e.kind() != std::io::ErrorKind::AlreadyExists {
+			return Err(e.into());
+		}
+	}
+
+	let ret = unsafe { libc::chmod(dir.to_str().unwrap().as_ptr() as *const libc::c_char, req.dir_mode) };
+
+	let _ = Errno::result(ret).map(drop)?;
+
+	let mut tmpfile = path.clone();
+	tmpfile.set_extension("tmp");
+
+	let file = OpenOptions::new()
+				.write(true)
+				.create(true)
+				.truncate(false)
+				.open(tmpfile.to_str().unwrap())?;
+	file.write_all_at(req.data.as_slice(), req.offset as u64)?;
+
+	let st = stat::stat(tmpfile.to_str().unwrap())?;
+
+	if st.st_size != req.file_size {
+		return Ok(());
+	}
+
+	let ret = unsafe { libc::chmod(tmpfile.to_str().unwrap().as_ptr() as *const libc::c_char, req.file_mode) };
+
+	let _ = Errno::result(ret).map(drop)?;
+	unistd::chown(tmpfile.to_str().unwrap(), Some(Uid::from_raw(req.uid as u32)), Some(Gid::from_raw(req.gid as u32)))?;
+
+	fs::rename(tmpfile, path)?;
+
+	Ok(())
 }

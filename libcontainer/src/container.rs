@@ -830,6 +830,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			write_json(pwfd, &SyncPC{pid: 0})?;
 
 			let mut pid = child.as_raw();
+			info!("first child! {}", pid);
 			info!("wait for final child!");
 			if pidns {
 				let json = read_json(pfd)?;
@@ -853,7 +854,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				*/
 				pid = msg.pid;
 				// notify child continue
-				info!("got final child pid!");
+				info!("got final child pid! {}", pid);
 				write_json(pwfd, &SyncPC { pid: 0 })?;
 				info!("resume child!");
 				// wait for child to exit
@@ -1049,7 +1050,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 
 		// setup sysctl
 		set_sysctls(&linux.Sysctl)?;
-		// unistd::chdir("/")?;
+		unistd::chdir("/")?;
 		if let Err(_) = stat::stat("marker") {
 			info!("not in expect root!!");
 		}

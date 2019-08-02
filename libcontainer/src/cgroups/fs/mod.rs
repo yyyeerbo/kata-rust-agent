@@ -370,6 +370,28 @@ fn apply(dir: &str, pid: pid_t) -> Result<()> {
 	Ok(())
 }
 
+fn try_write_file<T: ToString>(dir: &str, file: &str, v: T) -> Result<()> {
+	match write_file(dir, file, v) {
+		Err(e) => {
+			let err = Errno::last();
+			if err == Errno::EINVAL
+				|| err == Errno::ENODEV
+				|| err == Errno::ERANGE {
+				warn!("Invalid Arguments!");
+				return Ok(())
+			}
+
+			info!("{}", err.desc());
+
+			return Err(e);
+		}
+
+		Ok(_) => {}
+	}
+
+	Ok(())
+}
+
 impl Subsystem for CpuSet {
 	fn name(&self) -> String {
 		"cpuset".to_string()
@@ -388,11 +410,11 @@ impl Subsystem for CpuSet {
 		// For updatecontainer, just set the new value
 		if update {
 			if !cpus.is_empty() {
-				write_file(dir, CPUSET_CPUS, cpus)?;
+				try_write_file(dir, CPUSET_CPUS, cpus)?;
 			}
 
 			if !mems.is_empty() {
-				write_file(dir, CPUSET_MEMS, mems)?;
+				try_write_file(dir, CPUSET_MEMS, mems)?;
 			}
 
 			return Ok(())
@@ -405,12 +427,15 @@ impl Subsystem for CpuSet {
 			copy_parent(dir, CPUSET_MEMS)?;
 		}
 
+		// cpuset and mems can be invalid
+		// how to deal with it? Just ingore error for now
 		if !cpus.is_empty() {
-			write_file(dir, CPUSET_CPUS, cpus)?;
+			try_write_file(dir, CPUSET_CPUS, cpus)?;
 		}
 
 		if !mems.is_empty() {
-			write_file(dir, CPUSET_MEMS, mems)?;
+			info!("{}", mems);
+			try_write_file(dir, CPUSET_MEMS, mems)?;
 		}
 
 		Ok(())
@@ -1035,7 +1060,7 @@ impl Subsystem for NetPrio {
 		for p in network.Priorities.iter() {
 			let prio = format!("{} {}", p.Name, p.Priority);
 
-			write_file(dir, NET_PRIO_IFPRIOMAP, prio)?;
+			try_write_file(dir, NET_PRIO_IFPRIOMAP, prio)?;
 		}
 
 		Ok(())
@@ -1189,6 +1214,7 @@ pub struct Manager {
 	pub paths: HashMap<String, String>,
 	pub mounts: HashMap<String, String>,
 	pub rels: HashMap<String, String>,
+	pub cpath: String,
 }
 
 pub const THAWED: &'static str = "THAWED";
@@ -1367,6 +1393,56 @@ impl Manager {
 			paths: m,
 			mounts,
 			rels: paths,
+			cpath: cpath.to_string(),
 		})
 	}
+
+	pub fn update_cpuset_path(&self, cpuset: &str) -> Result<()> {
+		let root = if self.mounts.get("cpuset").is_some() {
+			self.mounts.get("cpuset").unwrap()
+		} else {
+			return Err(nix::Error::Sys(Errno::ENOENT).into());
+		};
+
+		let relss = if self.rels.get("cpuset").is_some() {
+			self.rels.get("cpuset").unwrap()
+		} else {
+			return Err(nix::Error::Sys(Errno::ENOENT).into());
+		};
+
+		let mut dir: String = root.to_string();
+		let rels: Vec<&str> = relss.split('/').collect();
+		let cpaths: Vec<&str> = self.cpath.as_str().split('/').collect();
+
+		for d in rels.iter() {
+			if d.is_empty() {
+				continue;
+			}
+
+			dir.push_str(d);
+			write_file(dir.as_str(), CPUSET_CPUS, cpuset)?;
+		}
+
+		for d in cpaths.iter() {
+			if d.is_empty() {
+				continue;
+			}
+
+			dir.push_str(d);
+			write_file(dir.as_str(), CPUSET_CPUS, cpuset)?;
+		}
+
+		Ok(())
+	}
+}
+
+pub fn get_guest_cpuset() -> Result<String> {
+	let m = get_mounts()?;
+	
+	if m.get("cpuset").is_none() {
+		warn!("no cpuset cgroup!");
+		return Err(nix::Error::Sys(Errno::ENOENT).into());
+	}
+
+	get_param_string(m.get("cpuset").unwrap(), CPUSET_CPUS)
 }

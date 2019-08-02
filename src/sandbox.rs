@@ -5,6 +5,7 @@ use libcontainer::process::Process;
 use libcontainer::container::LinuxContainer;
 use libcontainer::cgroups::Manager as CgroupManager;
 use libcontainer::cgroups::fs::Manager as FsManager;
+use libcontainer::cgroups;
 use std::collections::HashMap;
 use std::sync::mpsc::{Sender, Receiver};
 use libcontainer::container::BaseContainer;
@@ -12,6 +13,9 @@ use libcontainer::errors::*;
 use libc::pid_t;
 use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
 use crate::mount::{get_mount_fs_type, TYPEROOTFS};
+use protocols::agent::OnlineCPUMemRequest;
+use std::fs;
+use regex::Regex;
 
 #[derive(Debug, Default)]
 pub struct Sandbox {
@@ -136,4 +140,74 @@ impl Sandbox{
 		}
 		Ok(())
 	}
+
+	pub fn online_cpu_memory(&self, req: &OnlineCPUMemRequest) -> Result<()> {
+		if req.nb_cpus > 0 {
+			// online cpus
+			online_cpus(req.nb_cpus as i32)?;
+		}
+
+		if !req.cpu_only {
+			// online memory
+			online_memory()?;
+		}
+
+		let cpuset = cgroups::fs::get_guest_cpuset()?;
+
+		for (_, ctr) in self.containers.iter() {
+			info!("updating {}", ctr.id.as_str());
+			ctr.cgroup_manager
+				.as_ref()
+				.unwrap()
+				.update_cpuset_path(cpuset.as_str())?;
+		}
+
+		Ok(())
+	}
+}
+
+pub const CPU_ONLINE_PATH: &'static str = "/sys/devices/system/cpu";
+pub const MEMORY_ONLINE_PATH: &'static str = "/sys/devices/system/memory";
+pub const ONLINE_FILE: &'static str = "online";
+
+fn online_resources(path: &str, pattern: &str, num: i32) -> Result<i32> {
+	let mut count = 0;
+	let re = Regex::new(pattern)?;
+
+	for e in fs::read_dir(path)? {
+		let entry = e?;
+		let tmpname = entry.file_name();
+		let name = tmpname.to_str().unwrap();
+		let p = entry.path();
+
+		if re.is_match(name) {
+			let file = format!("{}/{}", p.to_str().unwrap(), ONLINE_FILE);
+			info!("{}", file.as_str());
+			let c = fs::read_to_string(file.as_str())?;
+
+			if c.trim().contains("0") {
+				fs::write(file.as_str(), "1")?;
+				count += 1;
+
+				if num > 0 && count == num {
+					break;
+				}
+			}
+		}
+	}
+
+	if num > 0 {
+		return Ok(count);
+	}
+
+	Ok(0)
+}
+
+fn online_cpus(num: i32) -> Result<i32> {
+	online_resources(CPU_ONLINE_PATH, r"cpu[0-9]+", num)
+}
+
+fn online_memory() -> Result<()> {
+	online_resources(MEMORY_ONLINE_PATH, r"memory[0-9]+", -1)?;
+	Ok(())
 }

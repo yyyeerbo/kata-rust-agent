@@ -42,6 +42,7 @@ mod version;
 mod uevent;
 mod device;
 pub mod netlink;
+pub mod random;
 
 use namespace::Namespace;
 use network::Network;
