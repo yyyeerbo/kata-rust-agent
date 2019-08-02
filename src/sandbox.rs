@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 //use crate::container::Container;
 use crate::namespace::{setup_persistent_ns, Namespace, NSTYPEIPC, NSTYPEUTS};
 use crate::network::Network;

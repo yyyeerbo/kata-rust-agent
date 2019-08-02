@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 #![allow(non_camel_case_types)]
 #![allow(non_upper_case_globals)]
 #![allow(dead_code)]

@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use nix::Result;
 use nix::fcntl::OFlag;
 use nix::unistd::{close, pipe2, read};

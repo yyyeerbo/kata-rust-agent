@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;

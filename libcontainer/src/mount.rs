@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use std::fs::{self, OpenOptions};
 use std::path::{self, Path, PathBuf};
 use protocols::oci::{self, Spec, LinuxDevice, Mount};

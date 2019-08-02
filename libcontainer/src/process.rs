@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 // use std::process::{Stdio, Command, ExitStatus};
 use std::fs::File;
 use std::io;

@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use libcontainer::errors::*;
 use std::fs::OpenOptions;
 use std::fs::{self, DirEntry, File};

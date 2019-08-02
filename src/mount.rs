@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use libcontainer::cgroups::fs::Manager as FsManager;
 use libcontainer::cgroups::Manager as CgroupManager;
 use libcontainer::errors::*;

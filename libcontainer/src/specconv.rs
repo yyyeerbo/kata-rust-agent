@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use protocols::oci::{self, Spec};
 use lazy_static;
 use nix::mount::MsFlags;

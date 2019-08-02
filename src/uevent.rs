@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use crate::device::ROOT_BUS_PATH;
 use crate::device::{online_device, SYSFS_DIR};
 use crate::grpc::SYSFS_MEMORY_ONLINE_PATH;

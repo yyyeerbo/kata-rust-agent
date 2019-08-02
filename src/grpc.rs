@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use futures::*;
 use grpcio::{EnvBuilder, Server, ServerBuilder};
 use grpcio::{RpcStatus, RpcStatusCode};

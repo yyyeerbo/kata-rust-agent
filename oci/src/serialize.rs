@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use serde;
 use serde_json;
 use serde::{Serialize, Deserialize};

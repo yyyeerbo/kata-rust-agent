@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use libc;
 use libcontainer::errors::*;
 use std::os::unix::io::RawFd;

@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 // looks like we can use caps to manipulate capabilities
 // conveniently, use caps to do it directly.. maybe
 

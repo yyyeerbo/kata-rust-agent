@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 //extern crate oci;
 //extern crate libcontainer;
 #![feature(map_get_key_value)]

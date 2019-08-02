@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use nix::mount::MsFlags;
 use nix::sched::{setns, unshare, CloneFlags};
 use nix::unistd::{getpid, gettid};

@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use nix::unistd::Pid;
 use std::collections::HashMap;
 use std::os::unix::io::RawFd;

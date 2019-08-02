@@ -1,3 +1,8 @@
+// Copyright (c) 2019 Ant Financial
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+
 use crate::cgroups::Manager as CgroupManager;
 use lazy_static;
 use crate::errors::*;
