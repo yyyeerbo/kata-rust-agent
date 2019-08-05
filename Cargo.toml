@@ -5,7 +5,7 @@ authors = ["Yang Bo <bo@hyper.sh>"]
 edition = "2018"
 
 [dependencies]
-#oci = { path = "oci" }
+oci = { path = "oci" }
 libcontainer = { path = "libcontainer" }
 protocols = { path = "protocols" }
 lazy_static = "1.3.0"

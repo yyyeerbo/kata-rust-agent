@@ -12,6 +12,7 @@ extern crate signal_hook;
 extern crate regex;
 #[macro_use]
 extern crate scan_fmt;
+extern crate oci;
 
 use futures::sync::oneshot;
 use futures::*;

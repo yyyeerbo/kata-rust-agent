@@ -26,7 +26,9 @@ where T: Default + PartialEq
 pub struct Spec {
 #[serde(default, rename = "ociVersion", skip_serializing_if = "String::is_empty")]
 	pub version: String,
+#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub process: Option<Process>,
+#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub root: Option<Root>,
 #[serde(default, skip_serializing_if = "String:: is_empty")]
 	pub hostname: String,
@@ -63,7 +65,7 @@ pub type LinuxRlimit = POSIXRlimit;
 pub struct Process {
 #[serde(default)]
 	pub terminal: bool,
-#[serde(default, rename = "consoleSize")]
+#[serde(default, rename = "consoleSize", skip_serializing_if = "Option::is_none")]
 	pub console_size: Option<Box>,
 	pub user: User,
 #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -122,7 +124,7 @@ pub struct User {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Root {
-#[serde(default)]
+#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub path: String,
 #[serde(default)]
 	pub readonly: bool,

@@ -476,7 +476,7 @@ fn linux_oci_to_grpc(l: &ociLinux) -> grpcLinux {
 	grpcLinux::default()
 }
 
-fn grpc_to_oci(grpc: &grpcSpec) -> ociSpec {
+pub fn grpc_to_oci(grpc: &grpcSpec) -> ociSpec {
 	// process
 	let process = if grpc.Process.is_some() {
 		Some(process_grpc_to_oci(grpc.Process.as_ref().unwrap()))
@@ -529,7 +529,7 @@ fn grpc_to_oci(grpc: &grpcSpec) -> ociSpec {
 	}
 }
 
-fn oci_to_grpc(oci: &ociSpec) -> grpcSpec {
+pub fn oci_to_grpc(oci: &ociSpec) -> grpcSpec {
 	unsafe { mem::zeroed::<grpcSpec>() }
 }
 

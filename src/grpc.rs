@@ -10,6 +10,7 @@ use libcontainer::cgroups::Manager as CgroupManager;
 use libcontainer::process::Process;
 use libcontainer::specconv::CreateOpts;
 use libcontainer::errors::*;
+use libcontainer;
 use protocols::empty::Empty;
 use protocols::agent::{WriteStreamResponse, ReadStreamResponse, GuestDetailsResponse, AgentDetails, WaitProcessResponse, ListProcessesResponse};
 use protocols::health::{HealthCheckResponse_ServingStatus, HealthCheckResponse};
@@ -48,6 +49,7 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 use nix::unistd::{Uid, Gid};
+use ::oci::{Spec as OCISpec};
 
 const SYSFS_MEMORY_BLOCK_SIZE_PATH: &'static str = "/sys/devices/system/memory/block_size_bytes";
 const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memory/probe";
@@ -72,7 +74,6 @@ impl protocols::agent_grpc::AgentService for agentService {
         let eid = req.exec_id.clone();
 
         let mut oci_spec = req.OCI.clone();
-        let mut oci = oci_spec.as_mut().unwrap();
 
         let sandbox = self.sandbox.clone();
         let mut s = sandbox.lock().unwrap();
@@ -97,8 +98,16 @@ impl protocols::agent_grpc::AgentService for agentService {
 			}
 		};
 
-        update_container_namespaces(&s, oci);
+		{
+        	let mut oci = oci_spec.as_mut().unwrap();
+        	update_container_namespaces(&s, oci);
+		}
 
+		let oci = oci_spec.as_ref().unwrap();
+
+		// write spec to bundle path, hooks might
+		// read ocispec
+		let _ = setup_bundle(oci);
 
         let opts = CreateOpts {
             cgroup_name: "".to_string(),
@@ -1639,6 +1648,26 @@ fn do_copy_file(req: &CopyFileRequest) -> Result<()> {
 	unistd::chown(tmpfile.to_str().unwrap(), Some(Uid::from_raw(req.uid as u32)), Some(Gid::from_raw(req.gid as u32)))?;
 
 	fs::rename(tmpfile, path)?;
+
+	Ok(())
+}
+
+fn setup_bundle(gspec: &Spec) -> Result<()>{
+	if gspec.Root.is_none() {
+		return Err(nix::Error::Sys(Errno::EINVAL).into());
+	}
+	let root = gspec.Root.as_ref().unwrap().Path.as_str();
+
+	let rootfs = fs::canonicalize(root)?;
+	let bundle_path = rootfs.parent().unwrap().to_str().unwrap();
+
+	let config = format!("{}/{}", bundle_path, "config.json");
+
+	let oci = libcontainer::grpc_to_oci(gspec);
+	info!("{:?}", oci.process.as_ref().unwrap().console_size.as_ref());
+	let _ = oci.save(config.as_str());
+
+	unistd::chdir(bundle_path)?;
 
 	Ok(())
 }
