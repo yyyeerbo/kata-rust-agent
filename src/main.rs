@@ -4,13 +4,13 @@
 //
 
 //extern crate oci;
-//extern crate libcontainer;
+//extern crate rustjail;
 #![feature(map_get_key_value)]
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
-extern crate libcontainer;
+extern crate rustjail;
 extern crate protocols;
 extern crate prctl;
 extern crate serde_json;
@@ -39,7 +39,7 @@ use std::os::unix::io::AsRawFd;
 use nix::unistd;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
-use libcontainer::errors::*;
+use rustjail::errors::*;
 
 mod mount;
 mod namespace;

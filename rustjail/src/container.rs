@@ -71,7 +71,7 @@ use scopeguard;
 
 const STATE_FILENAME: &'static str = "state.json";
 const EXEC_FIFO_FILENAME: &'static str = "exec.fifo";
-const VER_MARKER: &'static str = "1.2.0";
+const VER_MARKER: &'static str = "1.2.1";
 
 type Status = Option<String>;
 type Config = CreateOpts;
@@ -942,7 +942,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 		// 1. write kata-agent as singlethread program
 		// 2. use a binary to exec OR self exec to enter
 		//    namespaces before multithreaded, the way
-		//    libcontainer works
+		//    rustjail works
 /*
 		if s == CloneFlags::CLONE_NEWUSER {
 			unistd::close(fd)?;

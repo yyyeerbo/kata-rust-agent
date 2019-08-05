@@ -11,7 +11,7 @@ use libc;
 use std::clone::Clone;
 use std::default::Default;
 use std::mem;
-use libcontainer::errors::*;
+use rustjail::errors::*;
 use nix::errno::Errno;
 use protocols::types::{Route, Interface, IPAddress, IPFamily};
 use protocols::agent::{UpdateRoutesRequest, UpdateInterfaceRequest, Routes};

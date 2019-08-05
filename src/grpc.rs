@@ -9,13 +9,13 @@ use grpcio::{RpcStatus, RpcStatusCode};
 use std::sync::{Arc, Mutex};
 
 use lazy_static;
-use libcontainer::cgroups::fs::Manager as FsManager;
-use libcontainer::container::{BaseContainer, LinuxContainer};
-use libcontainer::cgroups::Manager as CgroupManager;
-use libcontainer::process::Process;
-use libcontainer::specconv::CreateOpts;
-use libcontainer::errors::*;
-use libcontainer;
+use rustjail::cgroups::fs::Manager as FsManager;
+use rustjail::container::{BaseContainer, LinuxContainer};
+use rustjail::cgroups::Manager as CgroupManager;
+use rustjail::process::Process;
+use rustjail::specconv::CreateOpts;
+use rustjail::errors::*;
+use rustjail;
 use protocols::empty::Empty;
 use protocols::agent::{WriteStreamResponse, ReadStreamResponse, GuestDetailsResponse, AgentDetails, WaitProcessResponse, ListProcessesResponse};
 use protocols::health::{HealthCheckResponse_ServingStatus, HealthCheckResponse};
@@ -30,7 +30,7 @@ use nix::sys::stat;
 use nix::errno::Errno;
 use nix::sys::signal::Signal;
 use nix::sys::wait::WaitStatus;
-use libcontainer::process::ProcessOperations;
+use rustjail::process::ProcessOperations;
 
 use crate::mount::{add_storages, STORAGEHANDLERLIST};
 use crate::sandbox::Sandbox;
@@ -1668,7 +1668,7 @@ fn setup_bundle(gspec: &Spec) -> Result<()>{
 
 	let config = format!("{}/{}", bundle_path, "config.json");
 
-	let oci = libcontainer::grpc_to_oci(gspec);
+	let oci = rustjail::grpc_to_oci(gspec);
 	info!("{:?}", oci.process.as_ref().unwrap().console_size.as_ref());
 	let _ = oci.save(config.as_str());
 

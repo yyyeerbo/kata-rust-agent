@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use libcontainer::errors::*;
+use rustjail::errors::*;
 use std::fs::OpenOptions;
 use std::fs::{self, DirEntry, File};
 use std::io::Write;

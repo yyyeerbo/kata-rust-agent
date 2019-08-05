@@ -1,5 +1,5 @@
 [package]
-name = "libcontainer"
+name = "rustjail"
 version = "0.1.0"
 authors = ["Yang Bo <bo@hyper.sh>"]
 edition = "2018"

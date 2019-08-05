@@ -229,6 +229,6 @@ impl Factory for LinuxFactory {
 	}
 
 	fn r#type(&self) -> String {
-		String::from("libcontainer")
+		String::from("rustjail")
 	}
 }

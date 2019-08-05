@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use libcontainer::cgroups::fs::Manager as FsManager;
-use libcontainer::cgroups::Manager as CgroupManager;
-use libcontainer::errors::*;
+use rustjail::cgroups::fs::Manager as FsManager;
+use rustjail::cgroups::Manager as CgroupManager;
+use rustjail::errors::*;
 use std::collections::HashMap;
 use std::ffi::{CString, OsStr};
 use std::fs;
