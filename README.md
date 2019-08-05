@@ -40,3 +40,6 @@ cargo build --target x86_64-unknown-linux-musl --release
 ## Run Kata CI with rust-agent
 
 ## Mini Benchmark
+The memory consumed by the go-agent and rust-agent as below:
+go-agent: about 11M
+rust-agent: about 1.1M
