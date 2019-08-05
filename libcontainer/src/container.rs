@@ -60,6 +60,7 @@ use nix::sys::uio::IoVec;
 use nix::sys::signal::{self, Signal};
 use nix::sys::wait;
 use nix::sys::termios::{self, SetArg, LocalFlags};
+use nix::sys::sysinfo;
 
 use libc::{self, VMIN, VTIME};
 use protobuf::{UnknownFields, CachedSize, SingularPtrField};
@@ -70,6 +71,7 @@ use scopeguard;
 
 const STATE_FILENAME: &'static str = "state.json";
 const EXEC_FIFO_FILENAME: &'static str = "exec.fifo";
+const VER_MARKER: &'static str = "1.2.0";
 
 type Status = Option<String>;
 type Config = CreateOpts;
@@ -572,6 +574,7 @@ impl BaseContainer for LinuxContainer
 		// the namespaces are got from init process or from
 		// saved spec.
 		debug!("before setup execfifo!");
+		info!("{}", VER_MARKER);
 		if p.init {
 			let fd = fcntl::open(
 				format!("/proc/self/fd/{}", fifofd).as_str(),

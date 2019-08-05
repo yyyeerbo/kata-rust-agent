@@ -168,11 +168,6 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()>{
 	Ok(())
 }
 
-fn setup_signal_handler() -> Result<(), String>{
-    set_child_subreaper(true)
-        .map_err(|err | format!("failed  to setup agent as a child subreaper, failed with {}", err))
-}
-
 // init_agent_as_init will do the initializations such as setting up the rootfs
 // when this agent has been run as the init process.
 fn init_agent_as_init() -> Result<()> {
