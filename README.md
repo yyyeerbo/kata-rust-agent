@@ -16,12 +16,12 @@ After that, we drafted the initial code here, and any contributions are welcome.
 - [x] Health API
 - [x] exec/list process
 - [x] network, interface/routes
-- [ ] Cgroups and container stats(api: update\_container, stats\_container)
-- [ ] initAgentAsInit(mount fs, udev, setup lo(easy to impl use netlink))
-- [ ] Capabilities, rlimit, readonly path, masked path, users
+- [x] Cgroups and container stats(api: update\_container, stats\_container)
+- [x] initAgentAsInit(mount fs, udev, setup lo(easy to impl use netlink))
+- [x] Capabilities, rlimit, readonly path, masked path, users
 - [ ] Validator
 - [ ] Hooks
-- [ ] api: `reseed_random_device`, `copy_file`, `online_cpu_memory`, `mem_hotplug_probe`, `set_guet_data_time`
+- [x] api: `reseed_random_device`, `copy_file`, `online_cpu_memory`, `mem_hotplug_probe`, `set_guet_data_time`
 - [ ] Refactor code
 - [ ] ci
 
