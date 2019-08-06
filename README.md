@@ -24,6 +24,7 @@ After that, we drafted the initial code here, and any contributions are welcome.
 - [x] api: `reseed_random_device`, `copy_file`, `online_cpu_memory`, `mem_hotplug_probe`, `set_guet_data_time`
 - [ ] Refactor code
 - [ ] ci
+- [ ] Debug Console
 
 ## Getting Started
 
