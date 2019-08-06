@@ -1089,7 +1089,7 @@ impl RtnlHandle {
 		let mut sa: libc::sockaddr_nl = unsafe { mem::zeroed::<libc::sockaddr_nl>() };
 		let fd = unsafe {
 			let tmpfd = libc::socket(libc::AF_NETLINK,
-				libc::SOCK_DGRAM, protocal);
+				libc::SOCK_DGRAM|libc::SOCK_CLOEXEC, protocal);
 
 			let sndbuf: libc::c_int = 32768;
 			let rcvbuf: libc::c_int = 1024 * 1024;

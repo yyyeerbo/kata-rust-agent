@@ -19,6 +19,7 @@ use nix::sys::wait::{self, WaitStatus, WaitPidFlag};
 use nix::unistd::{self, Pid};
 use nix::sys::signal::{self, Signal};
 use nix::Result;
+use nix::fcntl::OFlag;
 use nix::sys::socket::{self, AddressFamily, SockType, SockProtocol, SockFlag};
 
 use protocols::oci::Process as OCIProcess;
@@ -160,15 +161,15 @@ impl Process {
 			p.additional_groups = gids;
 		}
 
-		let (stdin, pstdin) = unistd::pipe()?;
+		let (stdin, pstdin) = unistd::pipe2(OFlag::O_CLOEXEC)?;;
 		p.parent_stdin = Some(pstdin);
 		p.stdin = Some(stdin);
 
-		let (pstdout, stdout) = unistd::pipe()?;
+		let (pstdout, stdout) = unistd::pipe2(OFlag::O_CLOEXEC)?;;
 		p.parent_stdout = Some(pstdout);
 		p.stdout = Some(stdout);
 
-		let (pstderr, stderr) = unistd::pipe()?;
+		let (pstderr, stderr) = unistd::pipe2(OFlag::O_CLOEXEC)?;;
 		p.parent_stderr = Some(pstderr);
 		p.stderr = Some(stderr);
 
