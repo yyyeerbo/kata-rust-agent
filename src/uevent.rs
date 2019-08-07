@@ -44,7 +44,7 @@ fn parse_uevent(message: &str) -> Uevent {
                 U_EVENT_DEV_PATH => event.devpath = String::from(key_val[1]),
                 U_EVENT_SEQ_NUM => event.seqnum = String::from(key_val[1]),
                 U_EVENT_INTERFACE => event.interface = String::from(key_val[1]),
-                _ => error!("failed to match the event field"),
+                _ => (),
             }
         }
     }

@@ -17,10 +17,11 @@ use rustjail::container::BaseContainer;
 use rustjail::errors::*;
 use libc::pid_t;
 use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
-use crate::mount::{get_mount_fs_type, TYPEROOTFS};
+use crate::mount::{get_mount_fs_type, remove_mounts, TYPEROOTFS};
 use protocols::agent::OnlineCPUMemRequest;
 use std::fs;
 use regex::Regex;
+
 
 #[derive(Debug, Default)]
 pub struct Sandbox {
@@ -29,10 +30,11 @@ pub struct Sandbox {
     pub containers: HashMap<String, LinuxContainer>,
     pub network: Network,
     pub mounts: Vec<String>,
+    pub container_mounts:  HashMap<String, Vec<String>>,
     pub pci_device_map: HashMap<String, String>,
     pub shared_utsns: Namespace,
     pub shared_ipcns: Namespace,
-    storages: HashMap<String, u32>,
+    pub storages: HashMap<String, u32>,
     pub running: bool,
     pub no_pivot_root: bool,
     enable_grpc_trace: bool,
@@ -51,6 +53,7 @@ impl Sandbox{
             network: Network::new(),
             containers: HashMap::new(),
             mounts: Vec::new(),
+            container_mounts: HashMap::new(),
             pci_device_map: HashMap::new(),
             shared_utsns: Namespace {
                 path: "".to_string(),
@@ -68,12 +71,52 @@ impl Sandbox{
         })
     }
 
-    pub fn unset_sandbox_storage(&self, path: &str) -> bool {
+    // unset_sandbox_storage will decrement the sandbox storage
+    // reference counter. If there aren't any containers using
+    // that sandbox storage, this method will remove the
+    // storage reference from the sandbox and return 'true, nil' to
+    // let the caller know that they can clean up the storage
+    // related directories by calling remove_sandbox_storage
+    //
+    // It's assumed that caller is calling this method after
+    // acquiring a lock on sandbox.
+    pub fn unset_sandbox_storage(&mut self, path: &str) -> bool {
+        match self.storages.get_mut(path) {
+            None => return false,
+            Some(count) => {
+                *count -= 1;
+                if *count < 1 {
+                    self.storages.remove(path);
+                }
+                return true
+            }
+        }
         false
     }
 
-    pub fn remove_sandbox_storage(&self, path: &str) -> bool {
-        false
+    // remove_sandbox_storage removes the sandbox storage if no
+    // containers are using that storage.
+    //
+    // It's assumed that caller is calling this method after
+    // acquiring a lock on sandbox.
+    pub fn remove_sandbox_storage(&self, path: &str) -> Result<()> {
+        let mounts = vec![path.to_string()];
+        remove_mounts(&mounts)?;
+        fs::remove_dir_all(path)?;
+        Ok(())
+    }
+
+    // unset_and_remove_sandbox_storage unsets the storage from sandbox
+    // and if there are no containers using this storage it will
+    // remove it from the sandbox.
+    //
+    // It's assumed that caller is calling this method after
+    // acquiring a lock on sandbox.
+    pub fn unset_and_remove_sandbox_storage(&mut self, path: &str)  -> Result<()> {
+        if self.unset_sandbox_storage(path) {
+            return self.remove_sandbox_storage(path)
+        }
+        Ok(())
     }
 
     pub fn is_running(&self) -> bool {

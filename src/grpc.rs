@@ -32,7 +32,7 @@ use nix::sys::signal::Signal;
 use nix::sys::wait::WaitStatus;
 use rustjail::process::ProcessOperations;
 
-use crate::mount::{add_storages, STORAGEHANDLERLIST};
+use crate::mount::{add_storages, remove_mounts, STORAGEHANDLERLIST};
 use crate::sandbox::Sandbox;
 use crate::version::{AGENT_VERSION, API_VERSION};
 use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
@@ -80,8 +80,8 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let mut oci_spec = req.OCI.clone();
 
-        let sandbox = self.sandbox.clone();
-        let mut s = sandbox.lock().unwrap();
+		let sandbox;
+		let mut s;
 
         info!("receive createcontainer {}\n", &cid);
 
@@ -96,6 +96,31 @@ impl protocols::agent_grpc::AgentService for agentService {
 					.fail(RpcStatus::new(
 						RpcStatusCode::Internal,
 						Some(e.to_string()),
+					))
+					.map_err(move |e| error!("fail to reply {:?}", req));
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		// Both rootfs and volumes (invoked with --volume for instance) will
+		// be processed the same way. The idea is to always mount any provided
+		// storage to the specified MountPoint, so that it will match what's
+		// inside oci.Mounts.
+		// After all those storages have been processed, no matter the order
+		// here, the agent will rely on rustjail (using the oci.Mounts
+		// list) to bind mount all of them inside the container.
+		match add_storages(req.storages.to_vec(), self.sandbox.clone()) {
+			Ok(m) => {
+				sandbox = self.sandbox.clone();
+				s = sandbox.lock().unwrap();
+				s.container_mounts.insert(cid.clone(), m);
+			},
+			Err(e) => {
+				let f = sink
+					.fail(RpcStatus::new(
+						RpcStatusCode::Internal,
+						Some(format!("failed to add storage to container: {:?}", e)),
 					))
 					.map_err(move |e| error!("fail to reply {:?}", req));
 				ctx.spawn(f);
@@ -233,6 +258,7 @@ impl protocols::agent_grpc::AgentService for agentService {
     ) {
 		let cid = req.container_id.clone();
 		let resp = Empty::new();
+		let mut cmounts: Vec<String> = vec![];
 
 		if req.timeout == 0 {
 			let s = Arc::clone(&self.sandbox);
@@ -240,6 +266,50 @@ impl protocols::agent_grpc::AgentService for agentService {
 			let ctr = sandbox.get_container(cid.as_str()).unwrap();
 
 			ctr.destroy().unwrap();
+
+			// Find the sandbox storage used by this container
+			let mounts = sandbox.container_mounts.get(&cid);
+			if mounts.is_some() {
+				let mounts =  mounts.unwrap();
+
+				match remove_mounts(&mounts) {
+					Ok(_) => (),
+					Err(e) => {
+						let f = sink
+							.fail(RpcStatus::new(
+								RpcStatusCode::Internal,
+								Some(format!("fail to umount container mounts: {:?}", e)),
+							))
+							.map_err(move |e| error!("get container fail {}", cid.clone()));
+						ctx.spawn(f);
+						return;
+					}
+				}
+
+				for m in mounts.iter() {
+					if sandbox.storages.get(m).is_some() {
+						cmounts.push(m.to_string());
+					}
+				}
+			}
+
+			for m in cmounts.iter() {
+				match sandbox.unset_and_remove_sandbox_storage(m) {
+					Ok(_) => (),
+					Err(e) => {
+						let f = sink
+							.fail(RpcStatus::new(
+								RpcStatusCode::Internal,
+								Some(format!("fail to remove container storage: {:?}", e)),
+							))
+							.map_err(move |e| error!("get container fail {}", cid.clone()));
+						ctx.spawn(f);
+						return;
+					}
+				}
+			}
+
+			sandbox.container_mounts.remove(cid.as_str());
 			sandbox.containers.remove(cid.as_str());
 
 			let f = sink.success(resp)
@@ -266,6 +336,50 @@ impl protocols::agent_grpc::AgentService for agentService {
 
 		let s = Arc::clone(&self.sandbox);
 		let mut sandbox = s.lock().unwrap();
+
+		// Find the sandbox storage used by this container
+		let mounts = sandbox.container_mounts.get(&cid);
+		if mounts.is_some() {
+			let mounts =  mounts.unwrap();
+
+			match remove_mounts(&mounts) {
+				Ok(_) => (),
+				Err(e) => {
+					let f = sink
+						.fail(RpcStatus::new(
+							RpcStatusCode::Internal,
+							Some(format!("fail to umount container mounts: {:?}", e)),
+						))
+						.map_err(move |e| error!("get container fail {}", cid.clone()));
+					ctx.spawn(f);
+					return;
+				}
+			}
+
+			for m in mounts.iter() {
+				if sandbox.storages.get(m).is_some() {
+					cmounts.push(m.to_string());
+				}
+			}
+		}
+
+		for m in cmounts.iter() {
+			match sandbox.unset_and_remove_sandbox_storage(m) {
+				Ok(_) => (),
+				Err(e) => {
+					let f = sink
+						.fail(RpcStatus::new(
+							RpcStatusCode::Internal,
+							Some(format!("fail to remove container storage: {:?}", e)),
+						))
+						.map_err(move |e| error!("get container fail {}", cid.clone()));
+					ctx.spawn(f);
+					return;
+				}
+			}
+		}
+
+		sandbox.container_mounts.remove(&cid);
 		sandbox.containers.remove(cid.as_str());
 
 		let f = sink.success(resp)

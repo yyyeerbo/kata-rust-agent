@@ -91,16 +91,16 @@ pub fn get_device_pci_address(pci_id: &str) -> Result<String> {
         .into());
     }
 
-    let bus = files_slice[0].file_name();
+    let bus = files_slice[0].file_name().unwrap().to_str().unwrap();
 
     // Device address is based on the bus of the bridge to which it is attached.
     // We do not pass devices as multifunction, hence the trailing 0 in the address.
-    let pci_device_addr = format!("{:?}:{}.0", bus, device_id);
+    let pci_device_addr = format!("{}:{}.0", bus, device_id);
 
     let bridge_device_pci_addr = format!("{}/{}", pci_bridge_addr, pci_device_addr);
 
     info!(
-        "Fetched PCI address for device completePCIAddr:{}\n",
+        "Fetched PCI address for device PCIAddr:{}\n",
         bridge_device_pci_addr
     );
 

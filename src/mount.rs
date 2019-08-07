@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::ffi::CStr;
 
 use libc::{c_char, c_void, mount};
-use nix::mount::MsFlags;
+use nix::mount::{self, MsFlags};
 
 use regex::Regex;
 use std::fs::File;
@@ -139,6 +139,8 @@ type StorageHandler = fn(&Storage, Arc<Mutex<Sandbox>>) -> Result<String>;
 lazy_static! {
     pub static ref STORAGEHANDLERLIST: HashMap<&'static str, StorageHandler> = {
     	let mut m = HashMap::new();
+    let blk: StorageHandler = virtio_blk_storage_handler;
+        m.insert(DRIVERBLKTYPE, blk);
 	let p9: StorageHandler= virtio9p_storage_handler;
         m.insert(DRIVER9PTYPE, p9);
 	let virtiofs: StorageHandler = virtiofs_storage_handler;
@@ -297,7 +299,9 @@ fn mount_storage(storage: &Storage) -> Result<()> {
                 fs::create_dir_all(dest_path).chain_err(|| "Create mount destination failed")?;
             }
         }
-        _ => (),
+        _ => {
+            ensure_destination_exists( storage.mount_point.as_str(), storage.fstype.as_str())?;
+        },
     }
 
     let options_vec = storage.options.to_vec();
@@ -308,7 +312,7 @@ fn mount_storage(storage: &Storage) -> Result<()> {
         "mount storage as: mount-source: {},
                 mount-destination: {},
                 mount-fstype:      {},
-                mount-options:     {}",
+                mount-options:     {}\n",
         storage.source.as_str(),
         storage.mount_point.as_str(),
         storage.fstype.as_str(),
@@ -511,3 +515,33 @@ pub fn cgroups_mount() -> Result<()> {
     Ok(())
 }
 
+pub fn remove_mounts(mounts: &Vec<String>) -> Result<()> {
+    for m in mounts.iter() {
+        mount::umount(m.as_str())?;
+    }
+    Ok(())
+}
+
+// ensureDestinationExists will recursively create a given mountpoint. If directories
+// are created, their permissions are initialized to mountPerm
+fn ensure_destination_exists(destination: &str, fs_type: &str)  -> Result<()> {
+    let d = Path::new(destination);
+    if !d.exists() {
+        let dir = match d.parent() {
+            Some(d) => d,
+            None => return Err(ErrorKind::ErrorCode(format!("mount destination {} doesn't exist", destination)).into())
+        };
+        if !dir.exists() {
+            fs::create_dir_all(dir)?;
+        }
+    }
+
+    if fs_type  != "bind" || d.is_dir() {
+        fs::create_dir_all(d)?;
+    } else {
+        fs::OpenOptions::new().create(true).open(d)?;
+    }
+
+    Ok(())
+
+}
