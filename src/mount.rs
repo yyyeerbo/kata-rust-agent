@@ -27,7 +27,7 @@ use regex::Regex;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
-use crate::device::{get_pci_device_name, online_device};
+use crate::device::{get_pci_device_name, get_scsi_device_name, online_device};
 use crate::protocols::agent::Storage;
 use crate::Sandbox;
 
@@ -153,6 +153,8 @@ lazy_static! {
         m.insert(DRIVERMMIOBLKTYPE, virtiommio);
     let local: StorageHandler = local_storage_handler;
         m.insert(DRIVERLOCALTYPE, local);
+    let scsi: StorageHandler = virtio_scsi_storage_handler;
+        m.insert(DRIVERSCSITYPE, scsi);
         m
     };
 }
@@ -314,6 +316,21 @@ fn virtio_blk_storage_handler(
         let dev_path = get_pci_device_name(sandbox, &storage.source)?;
         storage.source = dev_path;
     }
+
+    common_storage_handler(&storage)
+}
+
+// virtio_scsi_storage_handler handles the storage for scsi driver.
+fn virtio_scsi_storage_handler(
+    storage: &Storage,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<String> {
+
+    let mut storage = storage.clone();
+
+    // Retrieve the device path from SCSI address.
+    let dev_path = get_scsi_device_name(sandbox, &storage.source)?;
+    storage.source = dev_path;
 
     common_storage_handler(&storage)
 }

@@ -36,12 +36,12 @@ const SYSTEM_DEV_PATH: &'static str = "/dev";
 // Here in "0:0", the first number is the SCSI host number because
 // only one SCSI controller has been plugged, while the second number
 // is always 0.
-const SCSI_HOST_CHANNEL: &'static str = "0:0:";
+pub const SCSI_HOST_CHANNEL: &'static str = "0:0:";
 const SYS_CLASS_PREFIX: &'static str = "/sys/class";
 const SCSI_DISK_PREFIX: &'static str = "/sys/class/scsi_disk/0:0:";
-const SCSI_BLOCK_SUFFIX: &'static str = "block";
+pub const SCSI_BLOCK_SUFFIX: &'static str = "block";
 const SCSI_DISK_SUFFIX: &'static str = "/device/block";
-const SCSI_HOST_PATH: &'static str = "/sys/class/scis_host";
+const SCSI_HOST_PATH: &'static str = "/sys/class/scsi_host";
 
 pub fn rescan_pci_bus() -> Result<()> {
     online_device(PCI_BUS_RESCAN_FILE)
@@ -107,8 +107,7 @@ pub fn get_device_pci_address(pci_id: &str) -> Result<String> {
     Ok(bridge_device_pci_addr)
 }
 
-pub fn get_pci_device_name(sandbox: Arc<Mutex<Sandbox>>, pci_id: &str) -> Result<String> {
-    let pci_addr = get_device_pci_address(pci_id)?;
+pub fn get_device_name(sandbox: Arc<Mutex<Sandbox>>, dev_addr: &str, ) -> Result<String> {
     let mut dev_name: String = String::default();
     let (tx, rx) = mpsc::channel::<String>();
 
@@ -120,14 +119,12 @@ pub fn get_pci_device_name(sandbox: Arc<Mutex<Sandbox>>, pci_id: &str) -> Result
         let mut sb = s.lock().unwrap();
 
         for (key, value) in &(sb.pci_device_map) {
-            if key.contains(&pci_addr) {
+            if key.contains(dev_addr) {
                 dev_name = value.to_string();
-                info!("Device {} found in pci device map", &pci_addr);
+                info!("Device {} found in pci device map", dev_addr);
                 break;
             }
         }
-
-        rescan_pci_bus()?;
 
         // If device is not found in the device map, hotplug event has not
         // been received yet, create and add channel to the watchers map.
@@ -135,7 +132,7 @@ pub fn get_pci_device_name(sandbox: Arc<Mutex<Sandbox>>, pci_id: &str) -> Result
         // Note this is done inside the lock, not to miss any events from the
         // global udev listener.
         if dev_name == "" {
-            w.insert(pci_addr.clone(), tx);
+            w.insert(dev_addr.to_string(), tx);
         }
     }
 
@@ -147,16 +144,55 @@ pub fn get_pci_device_name(sandbox: Arc<Mutex<Sandbox>>, pci_id: &str) -> Result
             Err(e) => {
                 let watcher = GLOBAL_DEVICE_WATCHER.clone();
                 let mut w = watcher.lock().unwrap();
-                w.remove_entry(&pci_addr);
+                w.remove_entry(dev_addr);
 
                 return Err(ErrorKind::ErrorCode(format!(
                     "Timeout reached after {} waiting for device {}",
-                    TIMEOUT_HOTPLUG, &pci_addr
+                    TIMEOUT_HOTPLUG, dev_addr
                 ))
-                .into());
+                    .into());
             }
         }
     }
 
     Ok(format!("{}/{}", SYSTEM_DEV_PATH, &dev_name))
+}
+
+pub fn get_scsi_device_name(sandbox: Arc<Mutex<Sandbox>>, scsi_addr: &str) -> Result<String> {
+    scan_scsi_bus(scsi_addr)?;
+
+    let dev_sub_path = format!("{}{}/{}", SCSI_HOST_CHANNEL, scsi_addr, SCSI_BLOCK_SUFFIX);
+
+    get_device_name(sandbox, dev_sub_path.as_str())
+}
+
+pub fn get_pci_device_name(sandbox: Arc<Mutex<Sandbox>>, pci_id: &str) -> Result<String> {
+    let pci_addr = get_device_pci_address(pci_id)?;
+
+    rescan_pci_bus()?;
+
+    get_device_name(sandbox, pci_addr.as_str())
+}
+
+// scan_scsi_bus scans SCSI bus for the given SCSI address(SCSI-Id and LUN)
+pub fn scan_scsi_bus(scsi_addr: &str) -> Result<()> {
+    let tokens: Vec<&str> = scsi_addr.split(":").collect();
+    if tokens.len() != 2 {
+        return Err(ErrorKind::Msg(format!("Unexpected format for SCSI Address: {}, expect SCSIID:LUA", scsi_addr)).into());
+    }
+
+    // Scan scsi host passing in the channel, SCSI id and LUN. Channel
+    // is always 0 because we have only one SCSI controller.
+    let scan_data = format!("0 {} {}", tokens[0], tokens[1]);
+
+    for entry in fs::read_dir(SCSI_HOST_PATH)? {
+        let entry = entry?;
+
+        let host = entry.file_name();
+        let scan_path = format!("{}/{}/{}", SCSI_HOST_PATH, host.to_str().unwrap(), "scan");
+
+        fs::write(scan_path, &scan_data)?;
+    }
+
+    Ok(())
 }

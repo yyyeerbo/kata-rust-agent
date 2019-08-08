@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use crate::device::ROOT_BUS_PATH;
-use crate::device::{online_device, SYSFS_DIR};
+use crate::device::{online_device, ROOT_BUS_PATH, SYSFS_DIR, SCSI_HOST_CHANNEL, SCSI_BLOCK_SUFFIX};
 use crate::grpc::SYSFS_MEMORY_ONLINE_PATH;
 use crate::netlink::{RtnlHandle, NETLINK_UEVENT};
 use crate::sandbox::Sandbox;
@@ -69,7 +68,7 @@ pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
                             info!("got uevent message: {:?}", event);
 
                             // Check if device hotplug event results in a device node being created.
-                            if event.devname != "" && event.devpath.starts_with(ROOT_BUS_PATH) {
+                            if event.devname != "" && event.devpath.starts_with(ROOT_BUS_PATH) && event.subsystem == "block" {
                                 let watcher = GLOBAL_DEVICE_WATCHER.clone();
                                 let mut w = watcher.lock().unwrap();
 
@@ -87,9 +86,16 @@ pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
 
                                 let empties: Vec<_> = w
                                     .iter()
-                                    .filter(|(dev_pci_addr, _)| {
-                                        let p = format!("{}/{}", ROOT_BUS_PATH, *dev_pci_addr);
-                                        devpath.starts_with::<&str>(p.as_ref())
+                                    .filter(|(dev_addr, _)| {
+                                        let pci_p = format!("{}/{}", ROOT_BUS_PATH, *dev_addr);
+
+                                        // blk block device
+                                        devpath.starts_with(pci_p.as_str()) ||
+                                            // scsi block device
+                                            {
+                                                (*dev_addr).ends_with(SCSI_BLOCK_SUFFIX) &&
+                                                devpath.contains(*dev_addr)
+                                            }
                                     })
                                     .map(|(k, sender)| {
                                         let devname = event.devname.clone();
