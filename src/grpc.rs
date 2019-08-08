@@ -61,7 +61,6 @@ const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memor
 pub const SYSFS_MEMORY_ONLINE_PATH: &'static str = "/sys/devices/system/memory";
 const CONTAINER_BASE: &'static str = "/run/agent";
 
-
 #[derive(Clone, Default)]
 struct agentService {
     sandbox: Arc<Mutex<Sandbox>>,

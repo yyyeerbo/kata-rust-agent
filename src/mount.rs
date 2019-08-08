@@ -38,6 +38,8 @@ const DRIVERMMIOBLKTYPE: &'static str = "mmioblk";
 const DRIVERSCSITYPE: &'static str = "scsi";
 const DRIVERNVDIMMTYPE: &'static str = "nvdimm";
 const DRIVEREPHEMERALTYPE: &'static str = "ephemeral";
+const DRIVERLOCALTYPE: &'static str = "local";
+
 pub const TYPEROOTFS: &'static str   = "rootfs";
 
 pub const PROCMOUNTSTATS: &'static str = "/proc/self/mountstats";
@@ -149,6 +151,8 @@ lazy_static! {
         m.insert(DRIVEREPHEMERALTYPE, ephemeral);
     let virtiommio: StorageHandler = virtiommio_blk_storage_handler;
         m.insert(DRIVERMMIOBLKTYPE, virtiommio);
+    let local: StorageHandler = local_storage_handler;
+        m.insert(DRIVERLOCALTYPE, local);
         m
     };
 }
@@ -239,6 +243,37 @@ fn ephemeral_storage_handler(
     }
 
     common_storage_handler(storage)
+}
+
+fn local_storage_handler(
+    storage: &Storage,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<String> {
+    let s = sandbox.clone();
+    let mut sb = s.lock().unwrap();
+    let new_storage = sb.set_sandbox_storage(&storage.mount_point);
+
+    if !new_storage {
+        return Ok("".to_string());
+    }
+
+    fs::create_dir_all(&storage.mount_point)?;
+
+    let opts_vec: Vec<String> = storage.options.to_vec();
+
+    let opts = parse_options(opts_vec);
+    let mode = opts.get("mode");
+    if mode.is_some() {
+        let mode = mode.unwrap();
+        let mut permission = fs::metadata(&storage.mount_point)?.permissions();
+
+        let o_mode = u32::from_str_radix(mode, 8)?;
+        permission.set_mode(o_mode);
+
+        fs::set_permissions(&storage.mount_point, permission);
+    }
+
+    Ok("".to_string())
 }
 
 fn virtio9p_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
@@ -544,4 +579,18 @@ fn ensure_destination_exists(destination: &str, fs_type: &str)  -> Result<()> {
 
     Ok(())
 
+}
+
+fn parse_options(option_list: Vec<String>) -> HashMap<String, String> {
+    let mut options = HashMap::new();
+    for opt in option_list.iter() {
+        let fields: Vec<&str> = opt.split("=").collect();
+        if fields.len() != 2 {
+            continue;
+        }
+
+        options.insert(fields[0].to_string(), fields[1].to_string());
+    }
+
+    options
 }
