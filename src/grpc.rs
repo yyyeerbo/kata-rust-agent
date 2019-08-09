@@ -37,7 +37,7 @@ use crate::sandbox::Sandbox;
 use crate::version::{AGENT_VERSION, API_VERSION};
 use crate::netlink::{RtnlHandle, NETLINK_ROUTE};
 use crate::namespace::{NSTYPEIPC, NSTYPEUTS, NSTYPEPID};
-use crate::device::rescan_pci_bus;
+use crate::device::{rescan_pci_bus, add_devices};
 use crate::random;
 
 use std::fs;
@@ -82,6 +82,8 @@ impl protocols::agent_grpc::AgentService for agentService {
 		let sandbox;
 		let mut s;
 
+		let mut oci = oci_spec.as_mut().unwrap();
+
         info!("receive createcontainer {}\n", &cid);
 
 		// re-scan PCI bus
@@ -94,6 +96,25 @@ impl protocols::agent_grpc::AgentService for agentService {
 					.fail(RpcStatus::new(
 						RpcStatusCode::Internal,
 						Some(e.to_string()),
+					))
+					.map_err(move |e| error!("fail to reply {:?}", req));
+				ctx.spawn(f);
+				return;
+			}
+		};
+
+		// Some devices need some extra processing (the ones invoked with
+		// --device for instance), and that's what this call is doing. It
+		// updates the devices listed in the OCI spec, so that they actually
+		// match real devices inside the VM. This step is necessary since we
+		// cannot predict everything from the caller.
+		match add_devices(req.devices.to_vec(), oci, self.sandbox.clone()) {
+			Ok(_) => (),
+			Err(e) => {
+				let f = sink
+					.fail(RpcStatus::new(
+						RpcStatusCode::Internal,
+						Some(format!("failed to add devices to container: {:?}", e)),
 					))
 					.map_err(move |e| error!("fail to reply {:?}", req));
 				ctx.spawn(f);
@@ -126,12 +147,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 			}
 		};
 
-		{
-        	let mut oci = oci_spec.as_mut().unwrap();
-        	update_container_namespaces(&s, oci);
-		}
-
-		let oci = oci_spec.as_ref().unwrap();
+		update_container_namespaces(&s, oci);
 
 		// write spec to bundle path, hooks might
 		// read ocispec

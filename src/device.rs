@@ -4,16 +4,21 @@
 //
 
 use rustjail::errors::*;
-use std::fs::OpenOptions;
-use std::fs::{self, DirEntry, File};
+use std::fs::{self, DirEntry, File, OpenOptions};
 use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::path::Path;
+use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
+use libc::{major, minor, c_uint};
 
-use crate::mount::TIMEOUT_HOTPLUG;
+use crate::mount::{TIMEOUT_HOTPLUG, DRIVERBLKTYPE, DRIVERMMIOBLKTYPE, DRIVERNVDIMMTYPE, DRIVERSCSITYPE};
 use crate::sandbox::Sandbox;
 use crate::GLOBAL_DEVICE_WATCHER;
+use protocols::agent::Device;
+use protocols::oci::{Spec, LinuxDevice, LinuxDeviceCgroup, LinuxResources};
 
 #[cfg(any(
     target_arch = "x86_64",
@@ -42,6 +47,27 @@ const SCSI_DISK_PREFIX: &'static str = "/sys/class/scsi_disk/0:0:";
 pub const SCSI_BLOCK_SUFFIX: &'static str = "block";
 const SCSI_DISK_SUFFIX: &'static str = "/device/block";
 const SCSI_HOST_PATH: &'static str = "/sys/class/scsi_host";
+
+// DeviceHandler is the type of callback to be defined to handle every
+// type of device driver.
+type DeviceHandler = fn(&Device, &mut Spec, Arc<Mutex<Sandbox>>) -> Result<()>;
+
+// DeviceHandlerList lists the supported drivers.
+#[cfg_attr(rustfmt, rustfmt_skip)]
+lazy_static! {
+    pub static ref DEVICEHANDLERLIST: HashMap<&'static str, DeviceHandler> = {
+       let mut m = HashMap::new();
+    let blk: DeviceHandler = virtio_blk_device_handler;
+        m.insert(DRIVERBLKTYPE, blk);
+    let virtiommio: DeviceHandler = virtiommio_blk_device_handler;
+        m.insert(DRIVERMMIOBLKTYPE, virtiommio);
+    let local: DeviceHandler = virtio_nvdimm_device_handler;
+        m.insert(DRIVERNVDIMMTYPE, local);
+    let scsi: DeviceHandler = virtio_scsi_device_handler;
+        m.insert(DRIVERSCSITYPE, scsi);
+        m
+    };
+}
 
 pub fn rescan_pci_bus() -> Result<()> {
     online_device(PCI_BUS_RESCAN_FILE)
@@ -195,4 +221,143 @@ pub fn scan_scsi_bus(scsi_addr: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+// update_spec_device_list takes a device description provided by the caller,
+// trying to find it on the guest. Once this device has been identified, the
+// "real" information that can be read from inside the VM is used to update
+// the same device in the list of devices provided through the OCI spec.
+// This is needed to update information about minor/major numbers that cannot
+// be predicted from the caller.
+fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
+// If no container_path is provided, we won't be able to match and
+// update the device in the OCI spec device list. This is an error.
+
+    let major_id: c_uint;
+    let minor_id: c_uint;
+
+    // If no container_path is provided, we won't be able to match and
+    // update the device in the OCI spec device list. This is an error.
+    if device.container_path == "" {
+        return Err(ErrorKind::Msg(format!("container_path  cannot empty for device {:?}", device)).into());
+    }
+
+    let mut linux = match spec.Linux.as_mut() {
+        None => return Err(ErrorKind::ErrorCode("Spec didn't container linux field".to_string()).into()),
+        Some(l) => l
+    };
+
+    if ! Path::new(&device.vm_path).exists() {
+        return Err(ErrorKind::Msg(format!("vm_path:{} doesn't exist", device.vm_path)).into());
+    }
+
+    let meta = fs::metadata(&device.vm_path)?;
+    let dev_id = meta.rdev();
+    unsafe {
+        major_id = major(dev_id);
+        minor_id = minor(dev_id);
+    }
+
+    info!("got the device: dev_path: {}, major: {}, minor: {}\n", &device.vm_path, major_id, minor_id);
+
+    let mut devices = linux.Devices.as_mut_slice();
+    for dev in devices.iter_mut() {
+        if dev.Path == device.container_path {
+            let host_major = dev.Major;
+            let host_minor = dev.Minor;
+
+            dev.Major = major_id as i64;
+            dev.Minor = minor_id as i64;
+
+            info!("change the device from major: {} minor: {} to vm device major: {} minor: {}", host_major, host_minor, major_id, minor_id);
+
+            // Resources must be updated since they are used to identify the
+            // device in the devices cgroup.
+            let resource = linux.Resources.as_mut();
+            if resource.is_some() {
+                let mut res = resource.unwrap();
+                let mut ds = res.Devices.as_mut_slice();
+                for d in ds.iter_mut() {
+                    if d.Major == host_major && d.Minor == host_minor {
+                        d.Major = major_id as i64;
+                        d.Minor = minor_id as i64;
+
+                        info!("set resources for device major: {} minor: {}\n", major_id, minor_id);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// device.Id should be the predicted device name (vda, vdb, ...)
+// device.VmPath already provides a way to send it in
+fn virtiommio_blk_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+    if device.vm_path == "" {
+        return Err(ErrorKind::Msg("Invalid path for virtiommioblkdevice".to_string()).into());
+    }
+
+    update_spec_device_list(device, spec)
+}
+
+// device.Id should be the PCI address in the format  "bridgeAddr/deviceAddr".
+// Here, bridgeAddr is the address at which the brige is attached on the root bus,
+// while deviceAddr is the address at which the device is attached on the bridge.
+fn virtio_blk_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+    let dev_path  = get_pci_device_name(sandbox, device.id.as_str())?;
+
+    let mut dev = device.clone();
+    dev.vm_path  = dev_path;
+
+    update_spec_device_list(&dev, spec)
+}
+
+// device.Id should be the SCSI address of the disk in the format "scsiID:lunID"
+fn virtio_scsi_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+    let dev_path = get_scsi_device_name(sandbox, device.id.as_str())?;
+
+    let mut dev = device.clone();
+    dev.vm_path = dev_path;
+
+    update_spec_device_list(&dev, spec)
+}
+
+fn virtio_nvdimm_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+    update_spec_device_list(device, spec)
+}
+
+pub fn add_devices(devices: Vec<Device>, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+    for device in devices.iter() {
+        add_device(device, spec, sandbox.clone())?;
+    }
+
+    Ok(())
+}
+
+fn add_device(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+    // log before validation to help with debugging gRPC protocol
+    // version differences.
+    info!("device-id: {}, device-type: {}, device-vm-path: {}, device-container-path: {}, device-options: {:?}",
+          device.id, device.field_type, device.vm_path, device.container_path, device.options);
+
+    if device.field_type == "" {
+        return Err(ErrorKind::Msg(format!("invalid type for device {:?}", device)).into());
+    }
+
+    if device.id == "" && device.vm_path == "" {
+        return Err(ErrorKind::Msg(format!("invalid ID and VM path for device {:?}", device)).into());
+    }
+
+    if device.container_path == "" {
+        return Err(ErrorKind::Msg(format!("invalid container path for device {:?}", device)).into());
+    }
+
+    let dev_handler = match DEVICEHANDLERLIST.get(device.field_type.as_str()) {
+        None => return Err(ErrorKind::Msg(format!("Unknown device type {}", device.field_type)).into()),
+        Some(t) => t
+    };
+
+    dev_handler(device, spec, sandbox)
 }

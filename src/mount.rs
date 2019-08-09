@@ -33,10 +33,10 @@ use crate::Sandbox;
 
 const DRIVER9PTYPE: &'static str = "9p";
 const DRIVERVIRTIOFSTYPE: &'static str = "virtio-fs";
-const DRIVERBLKTYPE: &'static str = "blk";
-const DRIVERMMIOBLKTYPE: &'static str = "mmioblk";
-const DRIVERSCSITYPE: &'static str = "scsi";
-const DRIVERNVDIMMTYPE: &'static str = "nvdimm";
+pub const DRIVERBLKTYPE: &'static str = "blk";
+pub const DRIVERMMIOBLKTYPE: &'static str = "mmioblk";
+pub const DRIVERSCSITYPE: &'static str = "scsi";
+pub const DRIVERNVDIMMTYPE: &'static str = "nvdimm";
 const DRIVEREPHEMERALTYPE: &'static str = "ephemeral";
 const DRIVERLOCALTYPE: &'static str = "local";
 
