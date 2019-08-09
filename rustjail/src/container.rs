@@ -558,15 +558,6 @@ impl BaseContainer for LinuxContainer
 			// should retunr cfile instead of cfd?
 			write_json(cfd, &SyncPC { pid: 0 })?;
 		}
-		// close all useless fds
-
-		for fd in &p.to_close {
-			if fd.is_some() {
-				let _ = unistd::close(fd.unwrap());
-			}
-		}
-
-		p.to_close = Vec::default();
 
 		// new and the stat parent process
 		// For init process, we need to setup a lot of things 

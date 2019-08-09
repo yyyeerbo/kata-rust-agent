@@ -54,7 +54,6 @@ pub struct Process {
 	pub parent_stdin: Option<RawFd>,
 	pub parent_stdout: Option<RawFd>,
 	pub parent_stderr: Option<RawFd>,
-	pub to_close: Vec<Option<RawFd>>,
 	pub init: bool,
 	// pid of the init/exec process. since we have no command
 	// struct to store pid, we must store pid here.
@@ -85,7 +84,7 @@ impl ProcessOperations for Process {
 }
 
 impl Process {
-	pub fn new(ocip: &OCIProcess, id: &str, to_close: Vec<Option<RawFd>>, init: bool) -> Result<Self> {
+	pub fn new(ocip: &OCIProcess, id: &str, init: bool) -> Result<Self> {
 		let mut p = Process {
 			exec_id: String::from(id),
 			args: ocip.Args.to_vec(),
@@ -110,7 +109,6 @@ impl Process {
 			parent_stdin: None,
 			parent_stdout: None,
 			parent_stderr: None,
-			to_close,
 			init,
 			pid: -1,
 			exit_code: 0,
