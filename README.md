@@ -25,6 +25,7 @@ After that, we drafted the initial code here, and any contributions are welcome.
 - [ ] Refactor code
 - [ ] ci
 - [ ] Debug Console
+- [ ] cmdline
 
 ## Getting Started
 
