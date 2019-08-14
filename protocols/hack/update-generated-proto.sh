@@ -21,7 +21,7 @@ get_source_version() {
 }
 
 get_rs() {
-    local cmd="protoc --rust_out=./src/ --grpc_out=./src/,plugins=grpc:./src/ --plugin=protoc-gen-grpc=/home/teawater/.cargo/bin/grpc_rust_plugin -I ./protos/ ./protos/$1"
+    local cmd="protoc --rust_out=./src/ --grpc_out=./src/,plugins=grpc:./src/ --plugin=protoc-gen-grpc=`which grpc_rust_plugin` -I ./protos/ ./protos/$1"
     echo $cmd
     $cmd
     [ $? -eq 0 ] || die "Failed to get rust from $1"
@@ -31,9 +31,11 @@ if [ "$(basename $(pwd))" != "protocols" ] || [ ! -d "./hack/" ]; then
 	die "Please go to directory of protocols before execute this shell"
 fi
 which protoc
-[ $? -eq 0 ] || die "Please install protoc"
+[ $? -eq 0 ] || die "Please install protoc from github.com/protocolbuffers/protobuf"
+which protoc-gen-rust
+[ $? -eq 0 ] || die "Please install protobuf-codegen from github.com/pingcap/grpc-rs"
 which grpc_rust_plugin
-[ $? -eq 0 ] || die "Please install github.com/pingcap/grpc-rs"
+[ $? -eq 0 ] || die "Please install grpc_rust_plugin from github.com/pingcap/grpc-rs"
 
 if [ $UPDATE_PROTOS ]; then
     if [ ! $GOPATH ]; then
