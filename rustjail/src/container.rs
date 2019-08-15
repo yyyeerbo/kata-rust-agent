@@ -68,6 +68,7 @@ use protobuf::{UnknownFields, CachedSize, SingularPtrField};
 use std::io::{Error as IOError};
 use std::collections::HashMap;
 use scopeguard;
+use ::oci::{State as OCIState};
 
 const STATE_FILENAME: &'static str = "state.json";
 const EXEC_FIFO_FILENAME: &'static str = "exec.fifo";
@@ -87,9 +88,6 @@ impl Status {
 	}
 }
 */
-
-pub struct OCIState {
-}
 
 lazy_static!{
 	static ref NAMESPACES: HashMap<&'static str, CloneFlags> = {
