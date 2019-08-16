@@ -41,15 +41,15 @@ cargo build --target x86_64-unknown-linux-musl --release
 ```
 
 ## Run Kata CI with rust-agent
-   * First, install kata as noted by ["how to install Kata"](https://github.com/kata-containers/documentation/blob/master/install/README.md)
-   * Second, build your own kata initrd/image following the steps in ["how to build your own initrd/image"](https://github.com/kata-containers/documentation/blob/master/Developer-Guide.md#create-and-install-rootfs-and-initrd-image).
+   * Firstly, install kata as noted by ["how to install Kata"](https://github.com/kata-containers/documentation/blob/master/install/README.md)
+   * Secondly, build your own kata initrd/image following the steps in ["how to build your own initrd/image"](https://github.com/kata-containers/documentation/blob/master/Developer-Guide.md#create-and-install-rootfs-and-initrd-image).
 notes: Please use your rust agent instead of the go agent when building your initrd/image.
    * Clone the kata ci test cases from: https://github.com/kata-containers/tests.git, and then run the cri test with: 
-````bash
-$sudo -E PATH=$PATH -E GOPATH=$GOPATH   scripts/kata-e2e-node-test.sh
-````
+```bash
+$sudo -E PATH=$PATH -E GOPATH=$GOPATH integration/containerd/shimv2/shimv2-tests.sh
+```
 
 ## Mini Benchmark
-The memory consumed by the go-agent and rust-agent as below:
+The memory of RssAnon consumed by the go-agent and rust-agent as below:
 go-agent: about 11M
 rust-agent: about 1.1M
