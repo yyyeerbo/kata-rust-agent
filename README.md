@@ -26,6 +26,7 @@ After that, we drafted the initial code here, and any contributions are welcome.
 - [ ] ci
 - [ ] Debug Console
 - [ ] cmdline
+- [ ] Tracing
 
 ## Getting Started
 
