@@ -1,4 +1,0 @@
-[submodule "grpc-rs"]
-	path = grpc-rs
-	url = git@gitlab.alipay-inc.com:zh203158/grpc-rs.git
-	branch = rust_agent
