@@ -10,23 +10,31 @@ After that, we drafted the initial code here, and any contributions are welcome.
 
 ## Features
 
-- [x] create/start container
-- [x] signal/wait process
-- [x] I/O
-- [x] Health API
-- [x] exec/list process
-- [x] network, interface/routes
-- [x] Cgroups and container stats(api: update\_container, stats\_container)
-- [x] initAgentAsInit(mount fs, udev, setup lo(easy to impl use netlink))
-- [x] Capabilities, rlimit, readonly path, masked path, users
-- [ ] Validator
-- [ ] Hooks
-- [x] api: `reseed_random_device`, `copy_file`, `online_cpu_memory`, `mem_hotplug_probe`, `set_guet_data_time`
-- [ ] Refactor code
-- [ ] ci
-- [ ] Debug Console
-- [ ] cmdline
-- [ ] Tracing
+| Feature | Status |
+| :--|:--:|
+| **OCI Behaviors** |
+| create/start containers | :white_check_mark: |
+| signal/wait process     | :white_check_mark: |
+| exec/list process       | :white_check_mark: |
+| I/O stream              | :white_check_mark: |
+| Cgroups                 | :white_check_mark: |
+| Capabilities, rlimit, readonly path, masked path, users | :white_check_mark: |
+| container stats (`stats_container`)                     | :white_check_mark: |
+| Hooks                   | :heavy_multiplication_x: |
+| **Agent Features & APIs** |
+| run agent as `init` (mount fs, udev, setup `lo`) | :white_check_mark: |
+| block device as root device                      | :white_check_mark: |
+| Health API                                       | :white_check_mark: |
+| network, interface/routes (`update_container`)   | :white_check_mark: |
+| File transfer API (`copy_file`)                  | :white_check_mark: |
+| Device APIs (`reseed_random_device`, , `online_cpu_memory`, `mem_hotplug_probe`, `set_guet_data_time`) | :white_check_mark: |
+| vsock support                                    | :white_check_mark: |
+| virtio-serial support                            | :heavy_multiplication_x: |
+| OCI Spec validator                               | :heavy_multiplication_x: |
+| **Infrastructures**|
+| Debug Console | :heavy_multiplication_x: |
+| Command line  | :heavy_multiplication_x: |
+| Tracing       | :heavy_multiplication_x: |
 
 ## Getting Started
 
