@@ -31,10 +31,15 @@ After that, we drafted the initial code here, and any contributions are welcome.
 ## Getting Started
 
 ### Dependencies
+The `rust-agent` depends on [`grpc-rs`](https://github.com/pingcap/grpc-rs) by PingCAP. However, the upstream `grpc-rs` and [gRPC](https://github.com/grpc/grpc) need some changes to be used here, which may take some time to be landed. Therefore, we created a temporary fork or `grpc-rs` here:
+- https://github.com/alipay/grpc-rs/tree/rust_agent
 
 ### Build from Source
-
+The rust-agent need to be built with rust nightly, and static linked with musl.
 ```bash
+rustup toolchain install nightly
+rustup default nightly
+rustup target add x86_64-unknown-linux-musl --toolchain=nightly
 git submodule update --init --recursive  
 sudo ln -s /usr/bin/g++ /bin/musl-g++  
 cargo build --target x86_64-unknown-linux-musl --release
