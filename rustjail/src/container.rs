@@ -72,7 +72,7 @@ use ::oci::{State as OCIState};
 
 const STATE_FILENAME: &'static str = "state.json";
 const EXEC_FIFO_FILENAME: &'static str = "exec.fifo";
-const VER_MARKER: &'static str = "1.2.1";
+const VER_MARKER: &'static str = "1.2.3";
 
 type Status = Option<String>;
 type Config = CreateOpts;
@@ -554,7 +554,7 @@ impl BaseContainer for LinuxContainer
 			// notify parent to run poststart hooks
 			// cfd is closed when return from join_namespaces
 			// should retunr cfile instead of cfd?
-			write_json(cfd, &SyncPC { pid: 0 })?;
+			write_sync(cfd, 0)?;
 		}
 
 		// new and the stat parent process
@@ -786,6 +786,58 @@ fn write_json(fd: RawFd, msg: &SyncPC) -> Result<()>
 	Ok(())
 }
 
+pub const PIDSIZE: usize = mem::size_of::<pid_t>();
+
+fn read_sync(fd: RawFd) -> Result<pid_t>
+{
+	let mut v: [u8; PIDSIZE] = [0; PIDSIZE];
+	let mut len = 0;
+
+	loop {
+		match unistd::read(fd, &mut v[len..]) {
+			Ok(l) => {
+				len += l;
+				if len == PIDSIZE {
+					break;
+				}
+			}
+
+			Err(e) => {
+				if e != Error::from_errno(Errno::EINTR) {
+					return Err(e.into());
+				}
+			}
+		}
+	}
+
+	Ok(pid_t::from_be_bytes(v))
+}
+
+fn write_sync(fd: RawFd, pid: pid_t) -> Result<()>
+{
+	let buf = pid.to_be_bytes();
+	let mut len = 0;
+
+	loop {
+		match unistd::write(fd, &buf[len..]) {
+			Ok(l) => {
+				len += l;
+				if len == PIDSIZE {
+					break;
+				}
+			}
+
+			Err(e) => {
+				if e != Error::from_errno(Errno::EINTR) {
+					return Err(e.into());
+				}
+			}
+		}
+	}
+
+	Ok(())
+}
+
 fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool, no_pivot: bool, cm: &FsManager, parent: &mut u32) -> Result<(Pid, RawFd)>
 {
 	// let ccond = Cond::new().chain_err(|| "create cond failed")?;
@@ -804,7 +856,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			unistd::close(crfd)?;
 
             //wait child setup user namespace
-			let _ = read_json(pfd)?;
+			let _ = read_sync(pfd)?;
 
 			if userns {
 				// setup uid/gid mappings
@@ -824,16 +876,14 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				cm.apply(child.as_raw())?;
 			}
 
-			write_json(pwfd, &SyncPC{pid: 0})?;
+			write_sync(pwfd, 0)?;
 
 			let mut pid = child.as_raw();
 			info!("first child! {}", pid);
 			info!("wait for final child!");
 			if pidns {
-				let json = read_json(pfd)?;
+				pid = read_sync(pfd)?;
 				// pfile.read_to_string(&mut json)?;
-				info!("got json: {}", json);
-				let msg: SyncPC = serde_json::from_str(json.as_str())?;
 				/*
 				let msg: SyncPC = match serde_json::from_reader(&mut pfile) {
 					Ok(u) => u,
@@ -849,10 +899,9 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 					}
 				};
 				*/
-				pid = msg.pid;
 				// notify child continue
 				info!("got final child pid! {}", pid);
-				write_json(pwfd, &SyncPC { pid: 0 })?;
+				write_sync(pwfd, 0)?;
 				info!("resume child!");
 				// wait for child to exit
                 // Since the child would be reaped by our reaper, so
@@ -865,14 +914,14 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 
 			if init {
 				info!("wait for hook!");
-				let _ = read_json(pfd)?;
+				let _ = read_sync(pfd)?;
 				// run prestart hook
 
 				// notify child run prestart hooks completed
-				write_json(pwfd, &SyncPC { pid: 0 })?;
+				write_sync(pwfd, 0)?;
 
 				// wait to run poststart hook
-				let _ = read_json(pfd)?;
+				let _ = read_sync(pfd)?;
 				//run poststart hook
 			}
 			unistd::close(pfd)?;
@@ -905,8 +954,8 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				sched::unshare(CloneFlags::CLONE_NEWUSER)?;
 			}
 
-			write_json(cfd, &SyncPC{pid: 0})?;
-			let _ = read_json(crfd)?;
+			write_sync(cfd, 0)?;
+			let _ = read_sync(crfd)?;
 
 			if userns {
 				setid(Uid::from_raw(0), Gid::from_raw(0))?;
@@ -978,18 +1027,16 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 
 				unistd::close(chfd);
 				// set child pid to topmost parent and the exit
-				write_json(cfd, &SyncPC {
-					pid: child.as_raw() })?;
+				write_sync(cfd, child.as_raw())?;
 
 				info!("json: {}", serde_json::to_string(&SyncPC {
 					pid: child.as_raw() }).unwrap());
 				// wait for parent read it and the continue
 				info!("after send out child pid!");
-				let _ = read_json(crfd)?;
+				let _ = read_sync(crfd)?;
 
 				// notify child to continue.
-				write_json(phfd, &SyncPC {
-					pid: 0 })?;
+				write_sync(phfd, 0)?;
 				std::process::exit(0);
 			}
 			ForkResult::Child => {
@@ -1018,15 +1065,15 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 
 	// wait until parent notified
 	if pidns {
-		let _ = read_json(chfd)?;
+		let _ = read_sync(chfd)?;
 	}
 	unistd::close(chfd);
 
 	if init {
 		// notify parent to run prestart hooks
-		write_json(cfd, &SyncPC { pid: 0 })?;
+		write_sync(cfd, 0)?;
 		// wait parent run prestart hooks
-		let _ = read_json(crfd)?;
+		let _ = read_sync(crfd)?;
 	}
 
 	unistd::close(crfd)?;
