@@ -72,7 +72,7 @@ use ::oci::{State as OCIState};
 
 const STATE_FILENAME: &'static str = "state.json";
 const EXEC_FIFO_FILENAME: &'static str = "exec.fifo";
-const VER_MARKER: &'static str = "1.2.3";
+const VER_MARKER: &'static str = "1.2.5";
 
 type Status = Option<String>;
 type Config = CreateOpts;
@@ -516,9 +516,9 @@ impl BaseContainer for LinuxContainer
 			mount::finish_rootfs(spec)?;
 		}
 
-		if !p.cwd.is_empty() {
-			debug!("cwd: {}", p.cwd.as_str());
-			unistd::chdir(p.cwd.as_str())?;
+		if !p.oci.Cwd.is_empty() {
+			debug!("cwd: {}", p.oci.Cwd.as_str());
+			unistd::chdir(p.oci.Cwd.as_str())?;
 		}
 
 		// setup uid/gid
@@ -575,7 +575,9 @@ impl BaseContainer for LinuxContainer
 		}
 
 		// exec process
-		do_exec(&p.args[0], &p.args, &p.env)?;
+		let args = p.oci.Args.to_vec();
+		let env = p.oci.Env.to_vec();
+		do_exec(&args[0], &args, &env)?;
 
 		Err(ErrorKind::ErrorCode("fail to create container".to_string()).into())
 	}
