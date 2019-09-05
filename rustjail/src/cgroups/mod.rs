@@ -6,7 +6,7 @@
 use crate::errors::*;
 // use crate::configs::{FreezerState, Config};
 use std::collections::HashMap;
-use protocols::oci::{Spec, LinuxResources};
+use protocols::oci::LinuxResources;
 use protocols::agent::{CgroupStats};
 
 
@@ -16,7 +16,7 @@ pub mod systemd;
 pub type FreezerState = &'static str;
 
 pub trait Manager {
-	fn apply(&self, pid: i32) -> Result<()> {
+	fn apply(&self, _pid: i32) -> Result<()> {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 
@@ -32,7 +32,7 @@ pub trait Manager {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 
-	fn freeze(&self, state: FreezerState) -> Result<()> {
+	fn freeze(&self, _state: FreezerState) -> Result<()> {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 
@@ -44,7 +44,7 @@ pub trait Manager {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 
-	fn set(&self, container: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, _container: &LinuxResources, _update: bool) -> Result<()> {
 		Err(ErrorKind::ErrorCode("not supported!".to_string()).into())
 	}
 }

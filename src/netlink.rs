@@ -14,8 +14,7 @@ use std::mem;
 use rustjail::errors::*;
 use nix::errno::Errno;
 use protocols::types::{Route, Interface, IPAddress, IPFamily};
-use protocols::agent::{UpdateRoutesRequest, UpdateInterfaceRequest, Routes};
-use protobuf::{RepeatedField, SingularPtrField};
+use protobuf::{RepeatedField};
 use std::fmt;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -1335,10 +1334,10 @@ impl RtnlHandle {
 
 		unsafe {
 			// get link info
-			let (mut slv, mut lv) = self.dump_all_links()?;
+			let (_slv, lv) = self.dump_all_links()?;
 
 			// get addrinfo
-			let (mut sav, mut av) = self.dump_all_addresses(0)?;
+			let (_sav, av) = self.dump_all_addresses(0)?;
 			
 			// got all the link message and address message
 			// into lv and av repectively, parse attributes
@@ -1355,10 +1354,9 @@ impl RtnlHandle {
 					info!("invalid nlmsg! nlmsg_len: {}, nlmsg_space: {}", (*nlh).nlmsg_len, NLMSG_SPACE!(mem::size_of::<ifinfomsg>()));
 					break;
 				}
-				let mut msglen = (*nlh).nlmsg_len;
 
-				let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
-				let mut rtalen = IFLA_PAYLOAD!(nlh) as u32;
+				let rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
+				let rtalen = IFLA_PAYLOAD!(nlh) as u32;
 
 				let attrs = parse_attrs(rta, rtalen, (IFLA_MAX + 1) as usize)?;
 
@@ -1377,7 +1375,7 @@ impl RtnlHandle {
 
 				if attrs[IFLA_ADDRESS as usize] as i64 != 0 {
 					let alen = RTA_PAYLOAD!(attrs[IFLA_ADDRESS as usize]);
-					let mut a: *const u8 = RTA_DATA!(attrs[IFLA_ADDRESS as usize]) as *const u8;
+					let a: *const u8 = RTA_DATA!(attrs[IFLA_ADDRESS as usize]) as *const u8;
 					iface.hwAddr = format_address(a, alen as u32)?;
 				}
 
@@ -1387,7 +1385,7 @@ impl RtnlHandle {
 				for address in &av {
 					let alh: *const nlmsghdr = *address;
 					let ifa: *const ifaddrmsg = NLMSG_DATA!(alh) as *const ifaddrmsg;
-					let mut arta: *mut rtattr = IFA_RTA!(ifa) as *mut rtattr;
+					let arta: *mut rtattr = IFA_RTA!(ifa) as *mut rtattr;
 
 					if (*alh).nlmsg_type != RTM_NEWADDR {
 						continue;
@@ -1399,7 +1397,7 @@ impl RtnlHandle {
 						break;
 					}
 
-					let mut artalen = IFA_PAYLOAD!(alh) as u32;
+					let artalen = IFA_PAYLOAD!(alh) as u32;
 
 					if (*ifa).ifa_index as u32== (*ifi).ifi_index as u32 {
 						// found target addresses
@@ -1413,7 +1411,7 @@ impl RtnlHandle {
 						}
 
 						one.mask = format!("{}", (*ifa).ifa_prefixlen);
-						let mut a: *const u8 = RTA_DATA!(tattr) as *const u8;
+						let a: *const u8 = RTA_DATA!(tattr) as *const u8;
 						let alen = RTA_PAYLOAD!(tattr);
 						one.family = IPFamily::v4;
 
@@ -1443,7 +1441,6 @@ impl RtnlHandle {
 		let p = v.as_mut_ptr() as *mut libc::c_char;
 		let nlh: *mut nlmsghdr = p as *mut nlmsghdr;
 		let ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
-		let attr: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
 
 		(*nlh).nlmsg_len = NLMSG_LENGTH!(
 				mem::size_of::<ifinfomsg>() as i32) as __u32;
@@ -1467,7 +1464,6 @@ impl RtnlHandle {
 		let p = v.as_mut_ptr() as *mut libc::c_char;
 		let nlh: *mut nlmsghdr = p as *mut nlmsghdr;
 		let ifa: *mut ifaddrmsg = NLMSG_DATA!(nlh) as *mut ifaddrmsg;
-		let attr: *mut rtattr = IFA_RTA!(ifa) as *mut rtattr;
 
 		(*nlh).nlmsg_len = NLMSG_LENGTH!(mem::size_of::<ifaddrmsg>());
 		(*nlh).nlmsg_type = RTM_GETADDR;
@@ -1503,7 +1499,7 @@ impl RtnlHandle {
 			hw[5] = hw5;
 
 			// dump out all links
-			let (mut slv, mut lv) = self.dump_all_links()?;
+			let (_slv, lv) = self.dump_all_links()?;
 
 			for link in &lv {
 				let nlh: *const nlmsghdr = *link;
@@ -1519,8 +1515,8 @@ impl RtnlHandle {
 					break;
 				}
 
-				let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
-				let mut rtalen = IFLA_PAYLOAD!(nlh) as u32;
+				let rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
+				let rtalen = IFLA_PAYLOAD!(nlh) as u32;
 
 				let attrs = parse_attrs(rta, rtalen, (IFLA_MAX + 1) as usize)?;
 
@@ -1544,7 +1540,6 @@ impl RtnlHandle {
 		unsafe {
 			let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
 			let mut ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
-			let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
 
 			(*nlh).nlmsg_len = NLMSG_LENGTH!(mem::size_of::<ifinfomsg>()) as __u32;
 			(*nlh).nlmsg_type = RTM_GETLINK;
@@ -1639,10 +1634,9 @@ impl RtnlHandle {
 	fn set_link_status(&mut self, ifinfo: &ifinfomsg, up: bool) -> Result<()> {
 		let mut v: Vec<u8> = vec![0; 2048];
 		unsafe {
-			let mut p: *mut u8 = v.as_mut_ptr() as *mut u8;
+			let p: *mut u8 = v.as_mut_ptr() as *mut u8;
 			let mut nlh: *mut nlmsghdr = p as *mut nlmsghdr;
 			let mut ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
-			let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
 
 			(*nlh).nlmsg_len = NLMSG_LENGTH!(mem::size_of::<ifinfomsg>() as u32) as __u32;
 			(*nlh).nlmsg_type = RTM_NEWLINK;
@@ -1672,11 +1666,10 @@ impl RtnlHandle {
 	fn delete_one_addr(&mut self, ifinfo: &ifinfomsg, addr: &RtIPAddr) -> Result<()> {
 		let mut v: Vec<u8> = vec![0; 2048];
 		unsafe {
-			let mut p: *mut u8 = v.as_mut_ptr() as *mut u8;
+			let p: *mut u8 = v.as_mut_ptr() as *mut u8;
 
 			let mut nlh: *mut nlmsghdr = p as *mut nlmsghdr;
 			let mut ifa: *mut ifaddrmsg = NLMSG_DATA!(nlh) as *mut ifaddrmsg;
-			let mut rta: *mut rtattr = IFA_RTA!(ifa) as *mut rtattr;
 
 			(*nlh).nlmsg_len = NLMSG_LENGTH!(
 				mem::size_of::<ifaddrmsg>() as u32) as __u32;
@@ -1710,7 +1703,7 @@ impl RtnlHandle {
 	fn get_link_addresses(&mut self, ifinfo: &ifinfomsg) -> Result<Vec<RtIPAddr>> {
 		let mut del_addrs: Vec<RtIPAddr> = Vec::new();
 		unsafe {
-			let (mut sav, mut av) = self.dump_all_addresses(
+			let (_sav, av) = self.dump_all_addresses(
 				ifinfo.ifi_index as __u32)?;
 			
 			for a in &av {
@@ -1731,8 +1724,8 @@ impl RtnlHandle {
 					continue;
 				}
 
-				let mut rta: *mut rtattr = IFA_RTA!(ifa) as *mut rtattr;
-				let mut rtalen = IFA_PAYLOAD!(nlh) as u32;
+				let rta: *mut rtattr = IFA_RTA!(ifa) as *mut rtattr;
+				let rtalen = IFA_PAYLOAD!(nlh) as u32;
 
 				if ifinfo.ifi_index as u32 == (*ifa).ifa_index {
 					let attrs = parse_attrs(rta, rtalen, (IFA_MAX + 1) as usize)?;
@@ -1761,8 +1754,6 @@ impl RtnlHandle {
 		unsafe {
 			let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
 			let mut ifa: *mut ifaddrmsg = NLMSG_DATA!(nlh) as *mut ifaddrmsg;
-
-			let mut rta: *mut rtattr = IFA_RTA!(ifa) as *mut rtattr;
 
 			(*nlh).nlmsg_len = NLMSG_LENGTH!(mem::size_of::<ifaddrmsg>() as u32) as __u32;
 			(*nlh).nlmsg_type = RTM_NEWADDR;
@@ -1816,10 +1807,9 @@ impl RtnlHandle {
 		// set name, set mtu, IFF_NOARP. in one rtnl_talk.
 		let mut v: Vec<u8> = vec![0; 2048];
 		unsafe {
-			let mut p: *mut u8 = v.as_mut_ptr() as *mut u8;
+			let p: *mut u8 = v.as_mut_ptr() as *mut u8;
 			let mut nlh: *mut nlmsghdr = p as *mut nlmsghdr;
 			let mut ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
-			let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
 
 			(*nlh).nlmsg_len = NLMSG_LENGTH!(mem::size_of::<ifinfomsg>() as u32) as __u32;
 			(*nlh).nlmsg_type = RTM_NEWLINK;
@@ -1894,7 +1884,6 @@ impl RtnlHandle {
 				let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
 				let mut ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
 
-				let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
 				(*nlh).nlmsg_len = NLMSG_LENGTH!(
 					mem::size_of::<ifinfomsg>()) as __u32;
 				(*nlh).nlmsg_type = RTM_GETLINK;
@@ -1910,8 +1899,8 @@ impl RtnlHandle {
 
 				let mut retv = self.rtnl_talk(v.as_mut_slice(), true)?;
 				
-				let mut nlh: *mut nlmsghdr = retv.as_mut_ptr() as *mut nlmsghdr;
-				let mut ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
+				let nlh: *mut nlmsghdr = retv.as_mut_ptr() as *mut nlmsghdr;
+				let ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
 
 				if (*nlh).nlmsg_type != RTM_NEWLINK
 					&& (*nlh).nlmsg_type != RTM_DELLINK {
@@ -1925,8 +1914,8 @@ impl RtnlHandle {
 					continue;
 				}
 
-				let mut rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
-				let mut rtalen = IFLA_PAYLOAD!(nlh) as u32;
+				let rta: *mut rtattr = IFLA_RTA!(ifi) as *mut rtattr;
+				let rtalen = IFLA_PAYLOAD!(nlh) as u32;
 
 				let attrs = parse_attrs(rta, rtalen, (IFLA_MAX + 1) as usize)?;
 				
@@ -1950,7 +1939,7 @@ impl RtnlHandle {
 		let mut rs: Vec<Route> = Vec::new();
 
 		unsafe {
-			let (mut srv, mut rv) = self.dump_all_route_msgs()?;
+			let (_srv, rv) = self.dump_all_route_msgs()?;
 
 			// parse out routes and store in rs
 			for r in &rv {
@@ -1969,17 +1958,17 @@ impl RtnlHandle {
 					break;
 				}
 
-				let mut rta: *mut rtattr = RTM_RTA!(rtm) as *mut rtattr;
+				let rta: *mut rtattr = RTM_RTA!(rtm) as *mut rtattr;
 
 				if (*rtm).rtm_table != RT_TABLE_MAIN as u8 {
 					continue;
 				}
 
-				let mut rtalen = RTM_PAYLOAD!(nlh) as u32;
+				let rtalen = RTM_PAYLOAD!(nlh) as u32;
 
 				let attrs = parse_attrs(rta, rtalen, (RTA_MAX + 1) as usize)?;
 
-				let mut t = attrs[RTA_TABLE as usize];
+				let t = attrs[RTA_TABLE as usize];
 				if t as i64 != 0 {
 					let table = getattr32(t);
 					if table != RT_TABLE_MAIN {
@@ -1994,7 +1983,7 @@ impl RtnlHandle {
 
 				// destination
 				if t as i64 != 0 {
-					let mut data: *const u8 = RTA_DATA!(t) as *const u8;
+					let data: *const u8 = RTA_DATA!(t) as *const u8;
 					let len = RTA_PAYLOAD!(t) as u32;
 					rte.dest = format!("{}/{}",
 						format_address(data, len)?,
@@ -2004,7 +1993,7 @@ impl RtnlHandle {
 				// gateway
 				t = attrs[RTA_GATEWAY as usize];
 				if t as i64 != 0 {
-					let mut data:*const u8 = RTA_DATA!(t) as *const u8;
+					let data:*const u8 = RTA_DATA!(t) as *const u8;
 					let len = RTA_PAYLOAD!(t) as u32;
 					rte.gateway = format_address(data, len)?;
 
@@ -2020,7 +2009,7 @@ impl RtnlHandle {
 				}
 
 				if t as i64 != 0 {
-					let mut data: *const u8 = RTA_DATA!(t) as *const u8;
+					let data: *const u8 = RTA_DATA!(t) as *const u8;
 					let len = RTA_PAYLOAD!(t) as u32;
 
 					rte.source = format_address(data, len)?;
@@ -2070,7 +2059,6 @@ impl RtnlHandle {
 		let mut v: Vec<u8> = vec![0; 2048];
 		let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
 		let mut rtm: *mut rtmsg = NLMSG_DATA!(nlh) as *mut rtmsg;
-		let mut rta: *mut rtattr = RTM_RTA!(rtm) as *mut rtattr;
 
 		(*nlh).nlmsg_len = NLMSG_LENGTH!(
 			mem::size_of::<rtmsg>()) as u32;
@@ -2095,7 +2083,7 @@ impl RtnlHandle {
 		let mut rs: Vec<RtRoute> = Vec::new();
 
 		unsafe {
-			let (mut srv, mut rv) = self.dump_all_route_msgs()?;
+			let (_srv, rv) = self.dump_all_route_msgs()?;
 
 			for r in &rv {
 				let nlh: *const nlmsghdr = *r;
@@ -2117,12 +2105,12 @@ impl RtnlHandle {
 					continue;
 				}
 
-				let mut rta: *mut rtattr = RTM_RTA!(rtm) as *mut rtattr;
-				let mut rtalen = RTM_PAYLOAD!(nlh) as u32;
+				let rta: *mut rtattr = RTM_RTA!(rtm) as *mut rtattr;
+				let rtalen = RTM_PAYLOAD!(nlh) as u32;
 
 				let attrs = parse_attrs(rta, rtalen, (RTA_MAX + 1) as usize)?;
 
-				let mut t = attrs[RTA_TABLE as usize];
+				let t = attrs[RTA_TABLE as usize];
 				if t as i64 != 0 {
 					let table = getattr32(t);
 					if table != RT_TABLE_MAIN {
@@ -2380,28 +2368,28 @@ size: u8) {
 	(*rta).rta_type = cat;
 
 	if size == 1 {
-		let mut data: *mut u8 = RTA_DATA!(rta) as *mut u8;
+		let data: *mut u8 = RTA_DATA!(rta) as *mut u8;
 		*data = val as u8;
 		let len = RTA_LENGTH!(1) as u16;
 		(*rta).rta_len = len;
 	}
 
 	if size == 2 {
-		let mut data: *mut u16 = RTA_DATA!(rta) as *mut u16;
+		let data: *mut u16 = RTA_DATA!(rta) as *mut u16;
 		*data = val as u16;
 		let len = RTA_LENGTH!(2) as u16;
 		(*rta).rta_len = len;
 	}
 
 	if size == 4 {
-		let mut data: *mut u32 = RTA_DATA!(rta) as *mut u32;
+		let data: *mut u32 = RTA_DATA!(rta) as *mut u32;
 		*data = val as u32;
 		let len = RTA_LENGTH!(4) as u16;
 		(*rta).rta_len = len;
 	}
 
 	if size == 8 {
-		let mut data: *mut u64 = RTA_DATA!(rta) as *mut u64;
+		let data: *mut u64 = RTA_DATA!(rta) as *mut u64;
 		*data = val as u64;
 		let len = RTA_LENGTH!(8) as u16;
 		(*rta).rta_len = len;
@@ -2411,19 +2399,19 @@ size: u8) {
 			+ RTA_ALIGN!((*rta).rta_len);
 }
 
-unsafe fn addattr8(mut nlh: *mut nlmsghdr, cat: u16, val: u8) {
+unsafe fn addattr8(nlh: *mut nlmsghdr, cat: u16, val: u8) {
 	addattr_size(nlh, cat, val as u64, 1);
 }
 
-unsafe fn addattr16(mut nlh: *mut nlmsghdr, cat: u16, val: u16) {
+unsafe fn addattr16(nlh: *mut nlmsghdr, cat: u16, val: u16) {
 	addattr_size(nlh, cat, val as u64, 2);
 }
 
-unsafe fn addattr32(mut nlh: *mut nlmsghdr, cat: u16, val: u32) {
+unsafe fn addattr32(nlh: *mut nlmsghdr, cat: u16, val: u32) {
 	addattr_size(nlh, cat, val as u64, 4);
 }
 
-unsafe fn addattr64(mut nlh: *mut nlmsghdr, cat: u16, val: u64) {
+unsafe fn addattr64(nlh: *mut nlmsghdr, cat: u16, val: u64) {
 	addattr_size(nlh, cat, val, 8);
 }
 
@@ -2493,8 +2481,8 @@ unsafe fn getattr64(rta: *const rtattr) -> u64 {
 	getattr_size(rta)
 }
 
-unsafe fn format_address(mut addr: *const u8, len: u32) -> Result<String> {
-	let mut a = String::new();
+unsafe fn format_address(addr: *const u8, len: u32) -> Result<String> {
+	let mut a: String;
 	if len == 4 {
 		// ipv4
 		let mut i = 1;
@@ -2527,7 +2515,6 @@ unsafe fn format_address(mut addr: *const u8, len: u32) -> Result<String> {
 
 	if len == 16 {
 		// ipv6
-		let mut i = 1;
 		let p = addr as *const u8 as *const libc::c_void;
 		let mut ar: [u8; 16] = [0; 16];
 		let mut v: Vec<u8> = vec![0; 16];
@@ -2617,7 +2604,6 @@ impl From<Route> for RtRoute {
 	fn from(r: Route) -> Self {
 		// only handle ipv4
 
-		let rt: RtRoute = RtRoute::default();
 		let index = {
 			let mut rh = RtnlHandle::new(NETLINK_ROUTE, 0)
 					.unwrap();

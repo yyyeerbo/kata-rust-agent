@@ -6,6 +6,18 @@
 //extern crate oci;
 //extern crate rustjail;
 #![feature(map_get_key_value)]
+#![allow(non_camel_case_types)]
+#![allow(unused_parens)]
+// #![allow(deprecated)]
+// #![allow(unused_imports)]
+// #![allow(unreachable_code)]
+// #![allow(unused_assignments)]
+// #![allow(unused_variables)]
+// #![allow(unused_mut)]
+// #![allow(unused_must_use)]
+#![allow(unused_unsafe)]
+#![allow(dead_code)]
+#![allow(non_snake_case)]
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
@@ -20,19 +32,17 @@ extern crate regex;
 extern crate scan_fmt;
 extern crate oci;
 
-use futures::sync::oneshot;
 use futures::*;
 use log::LevelFilter;
 use std::fs;
-use std::io::Read;
-use std::{io, thread, time};
+//use std::io::Read;
+use std::{io, thread};
 //use lazy_static::{self, initialize};
 use std::env;
 use unistd::Pid;
-use std::time::Duration;
 use std::path::Path;
 use prctl::set_child_subreaper;
-use std::sync::mpsc::{self, Sender, Receiver};
+use std::sync::mpsc::{self, Sender};
 use signal_hook::{iterator::Signals, SIGCHLD};
 use nix::sys::wait::{self, WaitStatus};
 use std::os::unix::io::AsRawFd;
@@ -40,6 +50,7 @@ use nix::unistd;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use rustjail::errors::*;
+use std::os::unix::fs::{self as unixfs};
 
 mod mount;
 mod namespace;
@@ -51,8 +62,6 @@ mod device;
 pub mod netlink;
 pub mod random;
 
-use namespace::Namespace;
-use network::Network;
 use sandbox::Sandbox;
 use uevent::watch_uevents;
 use mount::{general_mount, cgroups_mount};
@@ -121,11 +130,11 @@ fn main() -> Result<()> {
 
 fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()>{
     set_child_subreaper(true)
-        .map_err(|err | format!("failed  to setup agent as a child subreaper, failed with {}", err));
+        .map_err(|err | format!("failed  to setup agent as a child subreaper, failed with {}", err))?;
 
     let signals = Signals::new(&[SIGCHLD])?;
 
-    let mut s = sandbox.clone();
+    let s = sandbox.clone();
 
     thread::spawn(move || {
         for sig in signals.forever() {
@@ -136,7 +145,7 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()>{
             if pid.is_some() {
                 let raw_pid = pid.unwrap().as_raw();
                 let mut sandbox = s.lock().unwrap();
-                let mut process = sandbox.find_process(raw_pid);
+                let process = sandbox.find_process(raw_pid);
                 if process.is_none() {
                     info!("unexpected child exited {}", raw_pid);
                     continue;
@@ -149,7 +158,7 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()>{
                     continue;
                 }
                 let pipe_write = p.exit_pipe_w.unwrap();
-                let mut ret: i32 = 0;
+                let ret: i32;
 
                 match wait_status {
                     WaitStatus::Exited(_, c) => ret = c,
@@ -161,7 +170,7 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()>{
                 }
 
                 p.exit_code = ret;
-                unistd::close(pipe_write);
+                let _ = unistd::close(pipe_write);
             }
         }
     });
@@ -175,7 +184,7 @@ fn init_agent_as_init() -> Result<()> {
     cgroups_mount()?;
 
     fs::remove_file(Path::new("/dev/ptmx"))?;
-    fs::soft_link(Path::new("/dev/pts/ptmx"), Path::new("/dev/ptmx"))?;
+    unixfs::symlink(Path::new("/dev/pts/ptmx"), Path::new("/dev/ptmx"))?;
 
     unistd::setsid()?;
 

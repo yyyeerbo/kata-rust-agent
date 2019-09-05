@@ -4,7 +4,7 @@
 //
 
 use nix::mount::MsFlags;
-use nix::sched::{setns, unshare, CloneFlags};
+use nix::sched::{unshare, CloneFlags};
 use nix::unistd::{getpid, gettid};
 use std::collections::HashMap;
 use std::fs;
@@ -61,7 +61,7 @@ pub fn setup_persistent_ns(ns_type: &'static str) -> Result<Namespace, String> {
 
     let new_thread = thread::spawn(move || {
         let origin_ns_path = get_current_thread_ns_path(ns_type);
-        let origin_ns_fd = match File::open(Path::new(&origin_ns_path)) {
+        let _origin_ns_fd = match File::open(Path::new(&origin_ns_path)) {
             Err(err) => return Err(err.to_string()),
             Ok(file) => file.as_raw_fd(),
         };
@@ -80,8 +80,8 @@ pub fn setup_persistent_ns(ns_type: &'static str) -> Result<Namespace, String> {
         let source: &str = origin_ns_path.as_str();
         let destination: &str = new_ns_path.as_path().to_str().unwrap_or("none");
 
-        let recursive = true;
-        let readonly = true;
+        let _recursive = true;
+        let _readonly = true;
         let mut flags = MsFlags::empty();
 
         match FLAGS.get("rbind") {

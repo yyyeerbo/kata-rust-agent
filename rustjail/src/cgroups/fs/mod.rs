@@ -8,15 +8,12 @@ use lazy_static;
 use crate::errors::*;
 use nix::errno::Errno;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::fs::{self, File};
-use protocols::oci::{Spec, LinuxDeviceCgroup, LinuxResources, LinuxWeightDevice, LinuxThrottleDevice};
+use std::fs;
+use protocols::oci::{LinuxDeviceCgroup, LinuxResources, LinuxWeightDevice, LinuxThrottleDevice};
 use libc::{self, pid_t};
 use protocols::agent::{CgroupStats,CpuStats, MemoryStats, PidsStats,BlkioStats, HugetlbStats, CpuUsage, ThrottlingData, MemoryData, BlkioStatsEntry};
 use protobuf::{SingularPtrField, UnknownFields, CachedSize, RepeatedField};
 use crate::cgroups::FreezerState;
-use std::io::Write;
-use nix::sys::stat;
 use crate::container::DEFAULT_DEVICES;
 use regex::Regex;
 
@@ -39,7 +36,7 @@ pub trait Subsystem {
 		"unknown".to_string()
 	}
 
-	fn set(&self, dir: &str, r: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, _dir: &str, _r: &LinuxResources, _update: bool) -> Result<()> {
 		Ok(())
 	}
 }
@@ -219,7 +216,7 @@ fn get_hugepage_sizes() -> Result<Vec<String>> {
 		if parts.len() != 2 { 
 			continue;
 		}
-		let mut size = parse_size(parts[1], &BMAP)?;
+		let size = parse_size(parts[1], &BMAP)?;
 		m.push(custom_size(size as f64, 1024.0, DABBRS.as_ref()));
 	}
 
@@ -314,8 +311,6 @@ fn read_file(dir: &str, file: &str) -> Result<String> {
 }
 
 fn copy_parent(dir: &str, file: &str) -> Result<()> {
-	let p = format!("{}/{}", dir, file);
-
 	let parent = if let Some(index) = dir.rfind('/') {
 		&dir[..index]
 	} else {
@@ -452,7 +447,7 @@ impl Subsystem for Cpu {
 		"cpu".to_string()
 	}
 
-	fn set(&self, dir: &str, r: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, dir: &str, r: &LinuxResources, _update: bool) -> Result<()> {
 		if r.CPU.is_none() {
 			return Ok(());
 		}
@@ -530,7 +525,7 @@ impl Subsystem for CpuAcct {
 		"cpuacct".to_string()
 	}
 
-	fn set(&self, dir: &str, r: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, _dir: &str, _r: &LinuxResources, _update: bool) -> Result<()> {
 		Ok(())
 	}
 }
@@ -625,7 +620,7 @@ impl Subsystem for Devices {
 		"devices".to_string()
 	}
 
-	fn set(&self, dir: &str, r: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, dir: &str, r: &LinuxResources, _update: bool) -> Result<()> {
 
 		for d in r.Devices.iter() {
 			write_device(d, dir)?;
@@ -697,7 +692,7 @@ impl Subsystem for Memory {
 
 		write_nonzero(dir, KMEM_TCP_LIMIT, memory.KernelTCP as i128)?;
 
-		if memory.Swappiness >= 0 && memory.Swappiness < 100 {
+		if memory.Swappiness <= 100 {
 			write_file(dir, SWAPPINESS, memory.Swappiness)?;
 		}
 
@@ -794,7 +789,7 @@ impl Subsystem for Pids {
 		"pids".to_string()
 	}
 
-	fn set(&self, dir: &str, r: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, dir: &str, r: &LinuxResources, _update: bool) -> Result<()> {
 		if r.Pids.is_none() {
 			return Ok(())
 		}
@@ -879,7 +874,7 @@ impl Subsystem for Blkio {
 		"blkio".to_string()
 	}
 
-	fn set(&self, dir: &str, r: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, dir: &str, r: &LinuxResources, _update: bool) -> Result<()> {
 		if r.BlockIO.is_none() {
 			return Ok(())
 		}
@@ -994,7 +989,7 @@ impl Subsystem for HugeTLB {
 		"hugetlb".to_string()
 	}
 
-	fn set(&self, dir: &str, r: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, dir: &str, r: &LinuxResources, _update: bool) -> Result<()> {
 		for l in r.HugepageLimits.iter() {
 			let file = format!("hugetlb.{}.limit_in_bytes", l.Pagesize);
 			write_file(dir, file.as_str(), l.Limit)?;
@@ -1037,7 +1032,7 @@ impl Subsystem for NetCls {
 		"net_cls".to_string()
 	}
 
-	fn set(&self, dir: &str, r: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, dir: &str, r: &LinuxResources, _update: bool) -> Result<()> {
 		if r.Network.is_none() {
 			return Ok(());
 		}
@@ -1055,7 +1050,7 @@ impl Subsystem for NetPrio {
 		"net_prio".to_string()
 	}
 
-	fn set(&self, dir: &str, r: &LinuxResources, update: bool) -> Result<()> {
+	fn set(&self, dir: &str, r: &LinuxResources, _update: bool) -> Result<()> {
 		if r.Network.is_none() {
 			return Ok(());
 		}
@@ -1194,7 +1189,6 @@ fn get_all_procs(dir: &str) -> Result<Vec<i32>> {
 
 		if path.is_file() && path.ends_with(CGROUP_PROCS) {
 			let dir = path.parent().unwrap().to_str().unwrap();
-			let file = path.file_name().unwrap().to_str().unwrap();
 
 			m.append(get_procs(dir)?.as_mut());
 

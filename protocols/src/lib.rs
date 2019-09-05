@@ -1,3 +1,5 @@
+#![allow(bare_trait_objects)]
+
 pub mod agent;
 pub mod agent_grpc;
 pub mod health;
