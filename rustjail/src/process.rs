@@ -29,23 +29,13 @@ use nix::errno::Errno;
 #[derive(Debug)]
 pub struct Process {
 	pub exec_id: String,
-	pub args: Vec<String>,
-	pub env: Vec<String>,
-	pub user: String,
-	pub additional_groups: Vec<String>,
-	pub cwd: String,
 	pub stdin: Option<RawFd>,
 	pub stdout: Option<RawFd>,
 	pub stderr: Option<RawFd>,
 	pub exit_pipe_r: Option<RawFd>,
 	pub exit_pipe_w: Option<RawFd>,
 	pub extra_files: Vec<File>,
-	pub console_width: u32,
-	pub console_height: u32,
 //	pub caps: Capabilities,
-	pub apparmor: String,
-	pub label: String,
-	pub no_new_privileges: bool,
 //	pub rlimits: Vec<Rlimit>,
 	pub console_socket: Option<RawFd>,
 	pub term_master: Option<RawFd>,
@@ -87,22 +77,12 @@ impl Process {
 	pub fn new(ocip: &OCIProcess, id: &str, init: bool) -> Result<Self> {
 		let mut p = Process {
 			exec_id: String::from(id),
-			args: ocip.Args.to_vec(),
-			env: ocip.Env.to_vec(),
-			user: String::from(""),
-			additional_groups: Vec::new(),
-			cwd: ocip.Cwd.clone(),
 			stdin: None,
 			stdout: None,
 			stderr: None,
 			exit_pipe_w: None,
 			exit_pipe_r: None,
-			console_width: 0,
-			console_height: 0,
 			extra_files: Vec::new(),
-			apparmor: ocip.ApparmorProfile.clone(),
-			label: ocip.SelinuxLabel.clone(),
-			no_new_privileges: ocip.NoNewPrivileges,
 			console_socket: None,
 			term_master: None,
 			parent_console_socket: None,
@@ -141,23 +121,6 @@ impl Process {
 		}
 
 		info!("created console socket!\n");
-
-		if ocip.ConsoleSize.is_some() {
-			let console = ocip.ConsoleSize.as_ref().unwrap();
-			p.console_width = console.Width;
-			p.console_height = console.Height;
-		}
-
-		if ocip.User.is_some() {
-			let user = ocip.User.as_ref().unwrap();
-			p.user = user.Username.clone();
-			
-			let mut gids = Vec::new();
-			for g in &user.AdditionalGids {
-				gids.push(format!("{}", *g));
-			}
-			p.additional_groups = gids;
-		}
 
 		let (stdin, pstdin) = unistd::pipe2(OFlag::O_CLOEXEC)?;;
 		p.parent_stdin = Some(pstdin);
