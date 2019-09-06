@@ -2678,7 +2678,7 @@ impl From<IPAddress> for RtIPAddr {
 
 #[cfg(test)]
 mod tests {
-use crate::netlink::{RTA_ALIGNTO, RTM_BASE, NLMSG_ALIGNTO};
+use crate::netlink::{RTA_ALIGNTO, RTM_BASE, NLMSG_ALIGNTO, nlmsghdr};
 use libc;
 use std::mem;
 #[test]
@@ -2686,6 +2686,6 @@ use std::mem;
 		println!("{}", RTA_ALIGN!(10));
 		assert_eq!(RTA_ALIGN!(6), 8);
 		assert_eq!(RTM_FAM!(36), 5);
-		assert_eq!(NLMSG_HDRLEN!(), NLMSG_ALIGN!(mem::size_of::<libc::nlmsghdr>() as libc::c_uint) as libc::c_int);
+		assert_eq!(NLMSG_HDRLEN!(), NLMSG_ALIGN!(mem::size_of::<nlmsghdr>() as libc::c_uint));
 	}
 }
