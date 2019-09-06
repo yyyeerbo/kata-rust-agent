@@ -3,12 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use protocols::oci::{self, Spec};
-use lazy_static;
-use nix::mount::MsFlags;
+use protocols::oci::{Spec};
 // use crate::configs::namespaces;
 // use crate::configs::device::Device;
-use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct CreateOpts {

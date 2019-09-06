@@ -3,14 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use rustjail::cgroups::fs::Manager as FsManager;
-use rustjail::cgroups::Manager as CgroupManager;
 use rustjail::errors::*;
 use std::collections::HashMap;
-use std::ffi::{CString, OsStr};
+use std::ffi::{CString};
 use std::fs;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::iter::FromIterator;
 
@@ -18,9 +15,7 @@ use std::path::Path;
 use std::ptr::null;
 use std::sync::{Arc, Mutex};
 
-use std::ffi::CStr;
-
-use libc::{c_char, c_void, mount};
+use libc::{c_void, mount};
 use nix::mount::{self, MsFlags};
 
 use regex::Regex;
@@ -183,9 +178,9 @@ impl<'a> BareMount<'a> {
     }
 
     pub fn mount(&self) -> Result<()> {
-        let mut source = null();
-        let mut dest = null();
-        let mut fs_type = null();
+        let source;
+        let dest;
+        let fs_type;
         let mut options = null();
         let cstr_options: CString;
         let cstr_source: CString;
@@ -272,27 +267,27 @@ fn local_storage_handler(
         let o_mode = u32::from_str_radix(mode, 8)?;
         permission.set_mode(o_mode);
 
-        fs::set_permissions(&storage.mount_point, permission);
+        fs::set_permissions(&storage.mount_point, permission)?;
     }
 
     Ok("".to_string())
 }
 
-fn virtio9p_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
+fn virtio9p_storage_handler(storage: &Storage, _sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
     common_storage_handler(storage)
 }
 
 // virtiommio_blk_storage_handler handles the storage for mmio blk driver.
 fn virtiommio_blk_storage_handler(
     storage: &Storage,
-    sandbox: Arc<Mutex<Sandbox>>,
+    _sandbox: Arc<Mutex<Sandbox>>,
 ) -> Result<String> {
     //The source path is VmPath
     common_storage_handler(storage)
 }
 
 // virtiofs_storage_handler handles the storage for virtio-fs.
-fn virtiofs_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
+fn virtiofs_storage_handler(storage: &Storage, _sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
     common_storage_handler(storage)
 }
 
@@ -485,7 +480,7 @@ pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
     let re = Regex::new(format!("device .+ mounted on {} with fstype (.+)", mount_point).as_str()).unwrap();
 
     // Read the file line by line using the lines() iterator from std::io::BufRead.
-    for (index, line) in reader.lines().enumerate() {
+    for (_index, line) in reader.lines().enumerate() {
         let line = line?;
         let capes = match re.captures(line.as_str()) {
             Some(c) => c,

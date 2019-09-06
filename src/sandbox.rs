@@ -8,11 +8,9 @@ use crate::namespace::{setup_persistent_ns, Namespace, NSTYPEIPC, NSTYPEUTS};
 use crate::network::Network;
 use rustjail::process::Process;
 use rustjail::container::LinuxContainer;
-use rustjail::cgroups::Manager as CgroupManager;
-use rustjail::cgroups::fs::Manager as FsManager;
 use rustjail::cgroups;
 use std::collections::HashMap;
-use std::sync::mpsc::{Sender, Receiver};
+use std::sync::mpsc::{Sender};
 use rustjail::container::BaseContainer;
 use rustjail::errors::*;
 use libc::pid_t;
@@ -91,7 +89,6 @@ impl Sandbox{
                 return true
             }
         }
-        false
     }
 
     // remove_sandbox_storage removes the sandbox storage if no

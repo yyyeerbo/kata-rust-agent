@@ -5,26 +5,22 @@
 
 // use std::process::{Stdio, Command, ExitStatus};
 use std::fs::File;
-use std::io;
-use std::io::{Stdin, Stdout, Stderr, Read};
 use std::os::unix::io::RawFd;
-use std::os::unix::raw::pid_t;
-use std::collections::HashMap;
+use libc::pid_t;
 
 // use crate::configs::{Capabilities, Rlimit};
 // use crate::cgroups::Manager as CgroupManager;
 // use crate::intelrdt::Manager as RdtManager;
 
-use nix::sys::wait::{self, WaitStatus, WaitPidFlag};
+use nix::sys::wait::{self, WaitStatus};
 use nix::unistd::{self, Pid};
 use nix::sys::signal::{self, Signal};
 use nix::Result;
 use nix::fcntl::OFlag;
-use nix::sys::socket::{self, AddressFamily, SockType, SockProtocol, SockFlag};
+use nix::sys::socket::{self, AddressFamily, SockType, SockFlag};
 
 use protocols::oci::Process as OCIProcess;
 use nix::Error;
-use nix::errno::Errno;
 
 #[derive(Debug)]
 pub struct Process {
@@ -122,25 +118,18 @@ impl Process {
 
 		info!("created console socket!\n");
 
-		let (stdin, pstdin) = unistd::pipe2(OFlag::O_CLOEXEC)?;;
+		let (stdin, pstdin) = unistd::pipe2(OFlag::O_CLOEXEC)?;
 		p.parent_stdin = Some(pstdin);
 		p.stdin = Some(stdin);
 
-		let (pstdout, stdout) = unistd::pipe2(OFlag::O_CLOEXEC)?;;
+		let (pstdout, stdout) = unistd::pipe2(OFlag::O_CLOEXEC)?;
 		p.parent_stdout = Some(pstdout);
 		p.stdout = Some(stdout);
 
-		let (pstderr, stderr) = unistd::pipe2(OFlag::O_CLOEXEC)?;;
+		let (pstderr, stderr) = unistd::pipe2(OFlag::O_CLOEXEC)?;
 		p.parent_stderr = Some(pstderr);
 		p.stderr = Some(stderr);
 
 		Ok(p)
 	}
 }
-
-pub struct Io {
-	stdin: Stdin,
-	stdout: Stdout,
-	stderr: Stderr,
-}
-

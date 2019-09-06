@@ -5,7 +5,6 @@
 
 use libc;
 use rustjail::errors::*;
-use std::os::unix::io::RawFd;
 use std::fs;
 use nix::fcntl::{self, OFlag};
 use nix::sys::stat::Mode;

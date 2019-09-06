@@ -3,6 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+// #![allow(unused_attributes)]
+// #![allow(unused_imports)]
+// #![allow(unused_variables)]
+// #![allow(unused_mut)]
+#![allow(dead_code)]
+// #![allow(deprecated)]
+// #![allow(unused_must_use)]
+#![allow(non_upper_case_globals)]
+// #![allow(unused_comparisons)]
 #[macro_use]
 extern crate error_chain;
 extern crate serde;
@@ -22,7 +31,6 @@ extern crate protobuf;
 extern crate log;
 #[macro_use]
 extern crate scan_fmt;
-#[macro_use]
 extern crate regex;
 extern crate oci;
 extern crate path_absolutize;
@@ -50,10 +58,10 @@ pub mod capabilities;
 // construtc ociSpec from grpcSpec, which is needed for hook
 // execution. since hooks read config.json
 
-use std::mem;
+use std::mem::MaybeUninit;
 use std::collections::HashMap;
 
-use protocols::oci::{Spec as grpcSpec, Process as grpcProcess, Root as grpcRoot, Mount as grpcMount, Hooks as grpcHooks, Linux as grpcLinux, Box as grpcBox, User as grpcUser, POSIXRlimit as grpcPOSIXRlimit};
+use protocols::oci::{Spec as grpcSpec, Process as grpcProcess, Root as grpcRoot, Mount as grpcMount, Hooks as grpcHooks, Linux as grpcLinux};
 use oci::{Spec as ociSpec, Process as ociProcess, Root as ociRoot, Mount as ociMount, Hooks as ociHooks, Linux as ociLinux, Box as ociBox, User as ociUser, POSIXRlimit as ociPOSIXRlimit, LinuxCapabilities as ociLinuxCapabilities};
 
 fn process_grpc_to_oci(p: &grpcProcess) -> ociProcess {
@@ -76,7 +84,7 @@ fn process_grpc_to_oci(p: &grpcProcess) -> ociProcess {
 			username: u.Username.clone(),
 		}
 	} else {
-		unsafe { mem::zeroed::<ociUser>() }
+		unsafe { MaybeUninit::zeroed().assume_init() }
 	};
 
 	let capabilities = if p.Capabilities.is_some() {
@@ -121,9 +129,9 @@ fn process_grpc_to_oci(p: &grpcProcess) -> ociProcess {
 	}
 }
 
-fn process_oci_to_grpc(p: ociProcess) -> grpcProcess {
+fn process_oci_to_grpc(_p: ociProcess) -> grpcProcess {
 	// dont implement it for now
-	unsafe { mem::zeroed::<grpcProcess>() } 
+	unsafe { MaybeUninit::zeroed().assume_init() } 
 }
 
 fn root_grpc_to_oci(root: &grpcRoot) -> ociRoot {
@@ -133,8 +141,8 @@ fn root_grpc_to_oci(root: &grpcRoot) -> ociRoot {
 	}
 }
 
-fn root_oci_to_grpc(root: &ociRoot) -> grpcRoot {
-	unsafe { mem::zeroed::<grpcRoot>() }
+fn root_oci_to_grpc(_root: &ociRoot) -> grpcRoot {
+	unsafe { MaybeUninit::zeroed().assume_init() }
 }
 
 fn mount_grpc_to_oci(m: &grpcMount) -> ociMount {
@@ -146,13 +154,12 @@ fn mount_grpc_to_oci(m: &grpcMount) -> ociMount {
 	}
 }
 
-fn mount_oci_to_grpc(m: &ociMount) -> grpcMount {
-	unsafe { mem::zeroed::<grpcMount>() }
+fn mount_oci_to_grpc(_m: &ociMount) -> grpcMount {
+	unsafe { MaybeUninit::zeroed().assume_init() }
 }
 
 use protocols::oci::{Hook as grpcHook};
 use oci::{Hook as ociHook};
-use protobuf::{RepeatedField, SingularPtrField};
 
 fn hook_grpc_to_oci(h: &[grpcHook]) -> Vec<ociHook> {
 	let mut r = Vec::new();
@@ -181,11 +188,11 @@ fn hooks_grpc_to_oci(h: &grpcHooks) -> ociHooks {
 	}
 }
 
-fn hooks_oci_to_grpc(h: &ociHooks) -> grpcHooks {
-	unsafe { mem::zeroed::<grpcHooks>() }
+fn hooks_oci_to_grpc(_h: &ociHooks) -> grpcHooks {
+	unsafe { MaybeUninit::zeroed().assume_init() }
 }
 
-use protocols::oci::{LinuxIDMapping as grpcLinuxIDMapping, LinuxResources as grpcLinuxResources, LinuxNamespace as grpcLinuxNamespace, LinuxDevice as grpcLinuxDevice, LinuxSeccomp as grpcLinuxSeccomp, LinuxIntelRdt as grpcLinuxIntelRdt};
+use protocols::oci::{LinuxIDMapping as grpcLinuxIDMapping, LinuxResources as grpcLinuxResources, LinuxSeccomp as grpcLinuxSeccomp};
 use oci::{LinuxIDMapping as ociLinuxIDMapping, LinuxResources as ociLinuxResources, LinuxNamespace as ociLinuxNamespace, LinuxDevice as ociLinuxDevice, LinuxSeccomp as ociLinuxSeccomp, LinuxIntelRdt as ociLinuxIntelRdt};
 
 fn idmap_grpc_to_oci(im: &grpcLinuxIDMapping) -> ociLinuxIDMapping {
@@ -204,7 +211,7 @@ fn idmaps_grpc_to_oci(ims: &[grpcLinuxIDMapping]) -> Vec<ociLinuxIDMapping> {
 	r
 }
 
-use protocols::oci::{LinuxDeviceCgroup as grpcLinuxDeviceCgroup, LinuxMemory as grpcLinuxMemory, LinuxCPU as grpcLinxCPU, LinuxPids as grpcLinuxPids, LinuxBlockIO as grpcLinuxBlockIO, LinuxHugepageLimit as grpcLinuxHugepageLimit, LinuxNetwork as grpcLinuxNetwork, LinuxInterfacePriority as grpcLinuxInterfacePriority, LinuxWeightDevice as grpcLinuxWeightDevice, LinuxThrottleDevice as grpcLinuxThrottleDevice};
+use protocols::oci::{LinuxBlockIO as grpcLinuxBlockIO, LinuxWeightDevice as grpcLinuxWeightDevice, LinuxThrottleDevice as grpcLinuxThrottleDevice};
 use oci::{LinuxDeviceCgroup as ociLinuxDeviceCgroup, LinuxMemory as ociLinuxMemory, LinuxCPU as ociLinuxCPU, LinuxPids as ociLinuxPids, LinuxBlockIO as ociLinuxBlockIO, LinuxHugepageLimit as ociLinuxHugepageLimit, LinuxNetwork as ociLinuxNetwork, LinuxInterfacePriority as ociLinuxInterfacePriority, LinuxWeightDevice as ociLinuxWeightDevice, LinuxThrottleDevice as ociLinuxThrottleDevice, LinuxBlockIODevice as ociLinuxBlockIODevice};
 
 fn throttle_devices_grpc_to_oci(tds: &[grpcLinuxThrottleDevice]) -> Vec<ociLinuxThrottleDevice> {
@@ -370,7 +377,6 @@ fn resources_grpc_to_oci(res: &grpcLinuxResources) -> ociLinuxResources {
 	}
 }
 
-use protocols::oci::{LinuxSyscall as grpcLinuxSyscall, LinuxSeccompArg as grpcLinuxSeccompArg};
 use oci::{LinuxSyscall as ociLinuxSyscall, LinuxSeccompArg as ociLinuxSeccompArg};
 
 fn seccomp_grpc_to_oci(sec: &grpcLinuxSeccomp) -> ociLinuxSeccomp {
@@ -477,7 +483,7 @@ fn linux_grpc_to_oci(l: &grpcLinux) -> ociLinux {
 	}
 }
 
-fn linux_oci_to_grpc(l: &ociLinux) -> grpcLinux {
+fn linux_oci_to_grpc(_l: &ociLinux) -> grpcLinux {
 	grpcLinux::default()
 }
 
@@ -534,8 +540,8 @@ pub fn grpc_to_oci(grpc: &grpcSpec) -> ociSpec {
 	}
 }
 
-pub fn oci_to_grpc(oci: &ociSpec) -> grpcSpec {
-	unsafe { mem::zeroed::<grpcSpec>() }
+pub fn oci_to_grpc(_oci: &ociSpec) -> grpcSpec {
+	unsafe { MaybeUninit::zeroed().assume_init() }
 }
 
 

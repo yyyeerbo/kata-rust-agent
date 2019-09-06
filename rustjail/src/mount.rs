@@ -4,8 +4,8 @@
 //
 
 use std::fs::{self, OpenOptions};
-use std::path::{self, Path, PathBuf};
-use protocols::oci::{self, Spec, LinuxDevice, Mount};
+use std::path::{Path, PathBuf};
+use protocols::oci::{Spec, LinuxDevice, Mount};
 use std::os::unix;
 use std::collections::{HashMap, HashSet};
 use nix::unistd::{self, Uid, Gid};
@@ -18,7 +18,7 @@ use nix::errno::Errno;
 
 use scan_fmt;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{BufRead, BufReader};
 use path_absolutize::*;
 
 use std::string::ToString;
@@ -143,7 +143,7 @@ pub fn init_rootfs(spec: &Spec, cpath: &HashMap<String, String>, mounts: &HashMa
 	Ok(())
 }
 
-fn mount_cgroups(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, cpath: &HashMap<String, String>, mounts: &HashMap<String, String>) -> Result<()> {
+fn mount_cgroups(m: &Mount, rootfs: &str, flags: MsFlags, _data: &str, cpath: &HashMap<String, String>, mounts: &HashMap<String, String>) -> Result<()> {
 	// mount tmpfs
 	let ctm = Mount {
 		source: "tmpfs".to_string(),
@@ -252,7 +252,7 @@ fn parse_mount_table() -> Result<Vec<Info>> {
     let mut infos = Vec::new();
 
 
-    for (index, line) in reader.lines().enumerate() {
+    for (_index, line) in reader.lines().enumerate() {
         let line = line?;
 
         let (id,
@@ -435,7 +435,6 @@ fn mount_from(m: &Mount, rootfs: &str,
                 | MsFlags::MS_SHARED
                 | MsFlags::MS_SLAVE),
         ) {
-        let chain = || format!("remount of {} failed", &dest);
         match mount::mount(
             Some(dest.as_str()),
             dest.as_str(),

@@ -4,9 +4,9 @@
 //
 
 use rustjail::errors::*;
-use std::fs::{self, DirEntry, File, OpenOptions};
-use std::io::Write;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::fs;
+// use std::io::Write;
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::path::Path;
@@ -18,7 +18,7 @@ use crate::mount::{TIMEOUT_HOTPLUG, DRIVERBLKTYPE, DRIVERMMIOBLKTYPE, DRIVERNVDI
 use crate::sandbox::Sandbox;
 use crate::GLOBAL_DEVICE_WATCHER;
 use protocols::agent::Device;
-use protocols::oci::{Spec, LinuxDevice, LinuxDeviceCgroup, LinuxResources};
+use protocols::oci::Spec;
 
 #[cfg(any(
     target_arch = "x86_64",
@@ -142,7 +142,7 @@ pub fn get_device_name(sandbox: Arc<Mutex<Sandbox>>, dev_addr: &str, ) -> Result
         let mut w = watcher.lock().unwrap();
 
         let s = sandbox.clone();
-        let mut sb = s.lock().unwrap();
+        let sb = s.lock().unwrap();
 
         for (key, value) in &(sb.pci_device_map) {
             if key.contains(dev_addr) {
@@ -167,7 +167,7 @@ pub fn get_device_name(sandbox: Arc<Mutex<Sandbox>>, dev_addr: &str, ) -> Result
 
         match rx.recv_timeout(Duration::from_secs(TIMEOUT_HOTPLUG)) {
             Ok(name) => dev_name = name,
-            Err(e) => {
+            Err(_) => {
                 let watcher = GLOBAL_DEVICE_WATCHER.clone();
                 let mut w = watcher.lock().unwrap();
                 w.remove_entry(dev_addr);
@@ -242,7 +242,7 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
         return Err(ErrorKind::Msg(format!("container_path  cannot empty for device {:?}", device)).into());
     }
 
-    let mut linux = match spec.Linux.as_mut() {
+    let linux = match spec.Linux.as_mut() {
         None => return Err(ErrorKind::ErrorCode("Spec didn't container linux field".to_string()).into()),
         Some(l) => l
     };
@@ -260,7 +260,7 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
 
     info!("got the device: dev_path: {}, major: {}, minor: {}\n", &device.vm_path, major_id, minor_id);
 
-    let mut devices = linux.Devices.as_mut_slice();
+    let devices = linux.Devices.as_mut_slice();
     for dev in devices.iter_mut() {
         if dev.Path == device.container_path {
             let host_major = dev.Major;
@@ -275,8 +275,8 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
             // device in the devices cgroup.
             let resource = linux.Resources.as_mut();
             if resource.is_some() {
-                let mut res = resource.unwrap();
-                let mut ds = res.Devices.as_mut_slice();
+                let res = resource.unwrap();
+                let ds = res.Devices.as_mut_slice();
                 for d in ds.iter_mut() {
                     if d.Major == host_major && d.Minor == host_minor {
                         d.Major = major_id as i64;
@@ -294,7 +294,7 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
 
 // device.Id should be the predicted device name (vda, vdb, ...)
 // device.VmPath already provides a way to send it in
-fn virtiommio_blk_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+fn virtiommio_blk_device_handler(device: &Device, spec: &mut Spec, _sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
     if device.vm_path == "" {
         return Err(ErrorKind::Msg("Invalid path for virtiommioblkdevice".to_string()).into());
     }
@@ -324,7 +324,7 @@ fn virtio_scsi_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mut
     update_spec_device_list(&dev, spec)
 }
 
-fn virtio_nvdimm_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+fn virtio_nvdimm_device_handler(device: &Device, spec: &mut Spec, _sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
     update_spec_device_list(device, spec)
 }
 

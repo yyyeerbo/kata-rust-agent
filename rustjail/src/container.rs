@@ -3,40 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-#[allow(unused_imports)]
-use serde;
-#[macro_use]
-use serde_derive;
 use serde_json;
-#[macro_use]
 use lazy_static;
-#[macro_use]
-use error_chain;
-use protocols::oci::{self, Spec, Linux, LinuxNamespace, LinuxResources, POSIXRlimit};
+use protocols::oci::{Spec, Linux, LinuxNamespace, LinuxResources, POSIXRlimit};
 use std::time::SystemTime;
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::mpsc::channel;
-use std::sync::Mutex;
 use std::path::Path;
 use std::fs;
 use std::mem;
-use std::mem::transmute;
 use std::os::unix::io::RawFd;
 use std::ffi::CString;
 // use crate::sync::Cond;
-use std::fs::File;
-use std::process::{Command};
 use protocols::oci::{LinuxDevice, LinuxIDMapping};
-use std::os::unix::raw::pid_t;
-use std::os::unix::io::FromRawFd;
+use libc::pid_t;
 use std::fmt::Display;
 use std::clone::Clone;
-use std::io::Read;
-
-use serde_json::error::{Category};
 
 // use crate::configs::namespaces::{NamespaceType};
-use crate::process::{self, Process};
+use crate::process::Process;
 use crate::cgroups::Manager as CgroupManager;
 // use crate::intelrdt::Manager as RdtManager;
 use crate::specconv::CreateOpts;
@@ -49,8 +32,8 @@ use crate::capabilities::{self, CAPSMAP};
 use protocols::agent::{StatsContainerResponse};
 
 use nix::sys::stat::{self, Mode};
-use nix::sys::socket::{self, AddressFamily, SockType, SockProtocol, SockFlag, ControlMessage, MsgFlags, ControlMessageOwned, CmsgBuffer};
-use nix::fcntl::{self, OFlag, FcntlArg};
+use nix::sys::socket::{self, ControlMessage, MsgFlags, ControlMessageOwned};
+use nix::fcntl::{self, OFlag};
 use nix::Error;
 use nix::errno::Errno;
 use nix::sched::{self, CloneFlags};
@@ -58,16 +41,11 @@ use nix::unistd::{self, Uid, Gid, Pid, ForkResult};
 use nix::pty;
 use nix::sys::uio::IoVec;
 use nix::sys::signal::{self, Signal};
-use nix::sys::wait;
-use nix::sys::termios::{self, SetArg, LocalFlags};
-use nix::sys::sysinfo;
 
-use libc::{self, VMIN, VTIME};
+use libc;
 use protobuf::{UnknownFields, CachedSize, SingularPtrField};
 
-use std::io::{Error as IOError};
 use std::collections::HashMap;
-use scopeguard;
 use ::oci::{State as OCIState};
 
 const STATE_FILENAME: &'static str = "state.json";
@@ -212,8 +190,8 @@ pub trait BaseContainer {
 	fn get_process(&mut self, eid: &str) -> Result<&mut Process>;
 	fn stats(&self) -> Result<StatsContainerResponse>;
 	fn set(&mut self, config: LinuxResources) -> Result<()>;
-	fn start(&mut self, mut p: Process) -> Result<()>;
-	fn run(&mut self, mut p: Process) -> Result<()>;
+	fn start(&mut self, p: Process) -> Result<()>;
+	fn run(&mut self, p: Process) -> Result<()>;
 	fn destroy(&mut self) -> Result<()>;
 	fn signal(&self, sig: Signal, all: bool) -> Result<()>;
 	fn exec(&mut self) -> Result<()>;
@@ -539,7 +517,7 @@ impl BaseContainer for LinuxContainer
 
 		// NoNewPeiviledges, Drop capabilities
 		if p.oci.NoNewPrivileges {
-			if let Err(e) = prctl::set_no_new_privileges(true) {
+			if let Err(_) = prctl::set_no_new_privileges(true) {
 				return Err(ErrorKind::ErrorCode("cannot set no new privileges".to_string()).into());
 			}
 		}
@@ -582,7 +560,7 @@ impl BaseContainer for LinuxContainer
 		Err(ErrorKind::ErrorCode("fail to create container".to_string()).into())
 	}
 
-	fn run(&mut self, mut p: Process) -> Result<()> {
+	fn run(&mut self, p: Process) -> Result<()> {
 		let init = p.init;
 		self.start(p)?;
 
@@ -711,81 +689,6 @@ fn get_namespaces(linux: &Linux, init: bool, init_pid: pid_t) -> Result<Vec<Linu
 		}
 	}
 	Ok(ns)
-}
-
-const BUFLEN: usize = 40;
-fn read_json(fd: RawFd) -> Result<String>
-{
-	let mut json: Vec<u8> = vec![0; BUFLEN];
-	let mut start  =  0;
-	let mut len = 0;
-	info!("read from {}\n", fd);
-	let mut ret = Ok("".to_string());
-
-	loop {
-		match unistd::read(fd, &mut json[start..]) {
-			Ok(n) => {
-				start += n;
-				if len  == 0 {
-					len = json[0] as usize;
-				}
-				debug!("read len={}, n={} start={}\n", len, n, start);
-				if start == len {
-					json.resize(len, 0);
-					if start >= 1 {
-						ret = Ok(String::from_utf8(json[1..].to_vec())?);
-					}
-					break;
-				}
-			}
-			Err(e) => {
-				if !e.eq(&Error::from(Errno::EINTR)) {
-					ret = Err(e)?;
-					break;
-				}
-			}
-		}
-	}
-
-	ret
-}
-
-fn write_json(fd: RawFd, msg: &SyncPC) -> Result<()>
-{
-	let buf_s = serde_json::to_string(&msg).unwrap();
-	// json length should be less than 255
-	let buf = buf_s.as_bytes();
-	let len: u8 = buf.len() as u8 + 1;
-
-	let mut bytes: Vec<u8> = vec![];
-	let mut start = 0;
-	let mut byte: [u8; 1] = [len; 1];
-	bytes.extend_from_slice(&byte);
-	bytes.extend_from_slice(buf);
-
-	let bytes_len = bytes.len();
-
-	let bytes_buf = bytes.as_slice();
-
-	info!("write to {} with {:?}", fd, msg);
-	loop {
-		match unistd::write(fd, &bytes_buf[start..]) {
-			Ok(n)  => { start += n;
-				if start == bytes_len {
-					break;
-				}
-			},
-			Err(e) =>  {
-				if !e.eq(&Error::from(Errno::EINTR)) {
-					return Err(Error::from(e))?;
-				}
-			}
-		}
-	}
-
-	info!("write out {} byte!", start);
-
-	Ok(())
 }
 
 pub const PIDSIZE: usize = mem::size_of::<pid_t>();
@@ -1027,7 +930,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 		match unistd::fork()? {
 			ForkResult::Parent { child } => {
 
-				unistd::close(chfd);
+				unistd::close(chfd)?;
 				// set child pid to topmost parent and the exit
 				write_sync(cfd, child.as_raw())?;
 
@@ -1043,7 +946,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			}
 			ForkResult::Child => {
 				*parent = 2;
-				unistd::close(phfd);
+				unistd::close(phfd)?;
 			}
 		}
 	}
@@ -1069,7 +972,7 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 	if pidns {
 		let _ = read_sync(chfd)?;
 	}
-	unistd::close(chfd);
+	unistd::close(chfd)?;
 
 	if init {
 		// notify parent to run prestart hooks
@@ -1284,7 +1187,7 @@ impl LinuxContainer
 		})
 	}
 
-	fn load<T: Into<String>>(id: T, base: T) -> Result<Self> {
+	fn load<T: Into<String>>(_id: T, _base: T) -> Result<Self> {
 		Err(ErrorKind::ErrorCode("not supported".to_string()).into())
 	}
 /*

@@ -8,7 +8,6 @@ use grpcio::{EnvBuilder, Server, ServerBuilder};
 use grpcio::{RpcStatus, RpcStatusCode};
 use std::sync::{Arc, Mutex};
 
-use lazy_static;
 use protobuf::{RepeatedField, SingularPtrField};
 use protocols::agent::CopyFileRequest;
 use protocols::agent::{
@@ -17,23 +16,17 @@ use protocols::agent::{
 };
 use protocols::empty::Empty;
 use protocols::health::{HealthCheckResponse, HealthCheckResponse_ServingStatus};
-use protocols::oci::{self, Linux, LinuxNamespace, Spec};
+use protocols::oci::{LinuxNamespace, Spec};
 use rustjail;
-use rustjail::cgroups::fs::Manager as FsManager;
-use rustjail::cgroups::Manager as CgroupManager;
 use rustjail::container::{BaseContainer, LinuxContainer};
 use rustjail::errors::*;
 use rustjail::process::Process;
 use rustjail::specconv::CreateOpts;
 
-use std::collections::HashMap;
-
 use nix::errno::Errno;
 use nix::sys::signal::Signal;
 use nix::sys::stat;
-use nix::sys::wait::WaitStatus;
 use nix::unistd::{self, Pid};
-use nix::Error;
 use rustjail::process::ProcessOperations;
 
 use crate::device::{add_devices, rescan_pci_bus};
@@ -54,8 +47,6 @@ use std::thread;
 use std::time::Duration;
 
 use nix::unistd::{Gid, Uid};
-#[rustfmt::skip]
-use ::oci::Spec as OCISpec;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::FileExt;
@@ -82,7 +73,7 @@ impl agentService {
         let sandbox;
         let mut s;
 
-        let mut oci = oci_spec.as_mut().unwrap();
+        let oci = oci_spec.as_mut().unwrap();
 
         info!("receive createcontainer {}\n", &cid);
 
@@ -152,7 +143,7 @@ impl agentService {
         let sandbox = self.sandbox.clone();
         let mut s = sandbox.lock().unwrap();
 
-        let mut ctr: &mut LinuxContainer = match s.get_container(cid.as_str()) {
+        let ctr: &mut LinuxContainer = match s.get_container(cid.as_str()) {
             Some(cr) => cr,
             None => {
                 return Err(ErrorKind::Nix(nix::Error::from_errno(Errno::EINVAL)).into());
@@ -166,7 +157,6 @@ impl agentService {
 
     fn do_remove_container(&mut self, req: protocols::agent::RemoveContainerRequest) -> Result<()> {
         let cid = req.container_id.clone();
-        let resp = Empty::new();
         let mut cmounts: Vec<String> = vec![];
 
         if req.timeout == 0 {
@@ -268,7 +258,7 @@ impl agentService {
 
         let p = Process::new(ocip, exec_id.as_str(), false)?;
 
-        let mut ctr = match sandbox.get_container(cid.as_str()) {
+        let ctr = match sandbox.get_container(cid.as_str()) {
             Some(v) => v,
             None => {
                 return Err(
@@ -313,7 +303,7 @@ impl agentService {
         let eid = req.exec_id.clone();
         let s = Arc::clone(&self.sandbox);
         let mut resp = WaitProcessResponse::new();
-        let mut pid: pid_t = -1;
+        let pid: pid_t;
         let mut exit_pipe_r: RawFd = -1;
         let mut buf: Vec<u8> = vec![0, 1];
 
@@ -336,7 +326,7 @@ impl agentService {
         }
 
         let mut sandbox = s.lock().unwrap();
-        let mut ctr = sandbox.get_container(cid.as_str()).unwrap();
+        let ctr = sandbox.get_container(cid.as_str()).unwrap();
         // need to close all fds
         let mut p = ctr.processes.get_mut(&pid).unwrap();
 
@@ -456,7 +446,7 @@ impl agentService {
             return Err(ErrorKind::Nix(nix::Error::from_errno(nix::errno::Errno::EINVAL)).into());
         }
 
-        let vector = read_stream(fd, cid.as_str(), eid.as_str(), req.len as usize)?;
+        let vector = read_stream(fd, req.len as usize)?;
 
         let mut resp = ReadStreamResponse::new();
         resp.set_data(vector);
@@ -472,20 +462,20 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::CreateContainerRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
-        if let Err(e) = self.do_create_container(req) {
+        if let Err(_) = self.do_create_container(req) {
             let f = sink
                 .fail(RpcStatus::new(
                     RpcStatusCode::Internal,
                     Some("fail to create container".to_string()),
                 ))
-                .map_err(|e| error!("container create fail"));
+                .map_err(|_e| error!("container create fail"));
             ctx.spawn(f);
             return;
         } else {
             let resp = Empty::new();
             let f = sink
                 .success(resp)
-                .map_err(move |e| error!("fail to create container"));
+                .map_err(move |_e| error!("fail to create container"));
             ctx.spawn(f);
         }
     }
@@ -502,7 +492,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some("fail to find container".to_string()),
                 ))
-                .map_err(move |e| error!("get container fail"));
+                .map_err(move |_e| error!("get container fail"));
             ctx.spawn(f);
             return;
         }
@@ -512,7 +502,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let resp = Empty::new();
         let f = sink
             .success(resp)
-            .map_err(move |e| error!("fail to create container"));
+            .map_err(move |_e| error!("fail to create container"));
         ctx.spawn(f);
     }
 
@@ -556,7 +546,7 @@ impl protocols::agent_grpc::AgentService for agentService {
             let resp = Empty::new();
             let f = sink
                 .success(resp)
-                .map_err(move |e| error!("cannot exec process"));
+                .map_err(move |_e| error!("cannot exec process"));
             ctx.spawn(f);
         }
     }
@@ -716,7 +706,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         if res.is_some() {
             match ctr.set(res.unwrap()) {
-                Err(e) => {
+                Err(_e) => {
                     let f = sink
                         .fail(RpcStatus::new(
                             RpcStatusCode::Internal,
@@ -750,7 +740,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let ctr = sandbox.get_container(cid.as_str()).unwrap();
 
         let resp = match ctr.stats() {
-            Err(e) => {
+            Err(_e) => {
                 let f = sink
                     .fail(RpcStatus::new(
                         RpcStatusCode::Internal,
@@ -771,16 +761,16 @@ impl protocols::agent_grpc::AgentService for agentService {
     }
     fn pause_container(
         &mut self,
-        ctx: ::grpcio::RpcContext,
-        req: protocols::agent::PauseContainerRequest,
-        sink: ::grpcio::UnarySink<protocols::empty::Empty>,
+        _ctx: ::grpcio::RpcContext,
+        _req: protocols::agent::PauseContainerRequest,
+        _sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
     }
     fn resume_container(
         &mut self,
-        ctx: ::grpcio::RpcContext,
-        req: protocols::agent::ResumeContainerRequest,
-        sink: ::grpcio::UnarySink<protocols::empty::Empty>,
+        _ctx: ::grpcio::RpcContext,
+        _req: protocols::agent::ResumeContainerRequest,
+        _sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
     }
     fn write_stdin(
@@ -792,7 +782,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         if let Ok(resp) = self.do_write_stream(req) {
             let f = sink
                 .success(resp)
-                .map_err(|e| error!("writestream request failed!"));
+                .map_err(|_e| error!("writestream request failed!"));
 
             ctx.spawn(f);
         } else {
@@ -801,7 +791,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::InvalidArgument,
                     Some(String::from("write stream failed")),
                 ))
-                .map_err(move |e| error!("write stream failed"));
+                .map_err(move |_e| error!("write stream failed"));
             ctx.spawn(f);
         }
     }
@@ -1091,7 +1081,7 @@ impl protocols::agent_grpc::AgentService for agentService {
             }
 
             match s.setup_shared_namespaces() {
-                Ok(t) => (),
+                Ok(_) => (),
                 Err(e) => err = e.to_string(),
             }
             if err.len() != 0 {
@@ -1163,7 +1153,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let sandbox = s.lock().unwrap();
         let empty = protocols::empty::Empty::new();
 
-        if let Err(e) = sandbox.online_cpu_memory(&req) {
+        if let Err(_) = sandbox.online_cpu_memory(&req) {
             let f = sink
                 .fail(RpcStatus::new(
                     RpcStatusCode::Internal,
@@ -1187,7 +1177,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
         let empty = protocols::empty::Empty::new();
-        if let Err(e) = random::reseed_rng(req.data.as_slice()) {
+        if let Err(_) = random::reseed_rng(req.data.as_slice()) {
             let f = sink
                 .fail(RpcStatus::new(
                     RpcStatusCode::Internal,
@@ -1248,7 +1238,7 @@ impl protocols::agent_grpc::AgentService for agentService {
     ) {
         let empty = protocols::empty::Empty::new();
 
-        if let Err(e) = do_mem_hotplug_by_probe(&req.memHotplugProbeAddr) {
+        if let Err(_) = do_mem_hotplug_by_probe(&req.memHotplugProbeAddr) {
             let f = sink
                 .fail(RpcStatus::new(
                     RpcStatusCode::Internal,
@@ -1271,7 +1261,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
         let empty = protocols::empty::Empty::new();
-        if let Err(e) = do_set_guest_date_time(req.Sec, req.Usec) {
+        if let Err(_) = do_set_guest_date_time(req.Sec, req.Usec) {
             let f = sink
                 .fail(RpcStatus::new(
                     RpcStatusCode::Internal,
@@ -1294,7 +1284,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
         let empty = protocols::empty::Empty::new();
-        if let Err(e) = do_copy_file(&req) {
+        if let Err(_) = do_copy_file(&req) {
             let f = sink
                 .fail(RpcStatus::new(
                     RpcStatusCode::Internal,
@@ -1318,7 +1308,7 @@ impl protocols::health_grpc::Health for healthService {
     fn check(
         &mut self,
         ctx: ::grpcio::RpcContext,
-        req: protocols::health::CheckRequest,
+        _req: protocols::health::CheckRequest,
         sink: ::grpcio::UnarySink<protocols::health::HealthCheckResponse>,
     ) {
         let mut resp = HealthCheckResponse::new();
@@ -1407,7 +1397,7 @@ fn get_agent_details() -> AgentDetails {
     detail
 }
 
-fn read_stream(fd: RawFd, cid: &str, eid: &str, l: usize) -> Result<Vec<u8>> {
+fn read_stream(fd: RawFd, l: usize) -> Result<Vec<u8>> {
     let mut v: Vec<u8> = Vec::with_capacity(l);
     unsafe {
         v.set_len(l);
@@ -1508,7 +1498,7 @@ pub fn start<S: Into<String>>(sandbox: Arc<Mutex<Sandbox>>, host: S, port: u16) 
 // sense to rely on the namespace path provided by the host since namespaces
 // are different inside the guest.
 fn update_container_namespaces(sandbox: &Sandbox, spec: &mut Spec) -> Result<()> {
-    let mut linux = match spec.Linux.as_mut() {
+    let linux = match spec.Linux.as_mut() {
         None => {
             return Err(
                 ErrorKind::ErrorCode("Spec didn't container linux field".to_string()).into(),
@@ -1519,7 +1509,7 @@ fn update_container_namespaces(sandbox: &Sandbox, spec: &mut Spec) -> Result<()>
 
     let mut pidNs = false;
 
-    let mut namespaces = linux.Namespaces.as_mut_slice();
+    let namespaces = linux.Namespaces.as_mut_slice();
     for namespace in namespaces.iter_mut() {
         if namespace.Type == NSTYPEPID {
             pidNs = true;
@@ -1553,7 +1543,7 @@ fn is_signal_handled(pid: pid_t, signum: u32) -> bool {
     // Open the file in read-only mode (ignoring errors).
     let file = match File::open(&file_name) {
         Ok(f) => f,
-        Err(e) => {
+        Err(_) => {
             warn!("failed to open file {}\n", file_name);
             return false;
         }
@@ -1562,10 +1552,10 @@ fn is_signal_handled(pid: pid_t, signum: u32) -> bool {
     let reader = BufReader::new(file);
 
     // Read the file line by line using the lines() iterator from std::io::BufRead.
-    for (index, line) in reader.lines().enumerate() {
+    for (_index, line) in reader.lines().enumerate() {
         let line = match line {
             Ok(l) => l,
-            Err(e) => {
+            Err(_) => {
                 warn!("failed to read file {}\n", file_name);
                 return false;
             }
@@ -1579,7 +1569,7 @@ fn is_signal_handled(pid: pid_t, signum: u32) -> bool {
             let sig_cgt_str = mask_vec[1];
             let sig_cgt_mask = match u64::from_str_radix(sig_cgt_str, 16) {
                 Ok(h) => h,
-                Err(e) => {
+                Err(_) => {
                     warn!("failed to parse the str {} to hex\n", sig_cgt_str);
                     return false;
                 }

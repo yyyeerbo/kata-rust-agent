@@ -9,7 +9,6 @@
 use lazy_static;
 
 use caps::{self, CapSet, Capability, CapsHashSet};
-use protobuf::{RepeatedField};
 use protocols::oci::{LinuxCapabilities};
 use std::collections::HashMap;
 use crate::errors::*;
@@ -91,7 +90,7 @@ pub fn drop_priviledges(caps: &LinuxCapabilities) -> Result<()> {
 	caps::set(None, CapSet::Permitted, to_capshashset(caps.Permitted.as_ref()))?;
 	caps::set(None, CapSet::Inheritable, to_capshashset(caps.Inheritable.as_ref()))?;
 
-	if let Err(e) = caps::set(None, CapSet::Ambient, to_capshashset(caps.Ambient.as_ref())) {
+	if let Err(_) = caps::set(None, CapSet::Ambient, to_capshashset(caps.Ambient.as_ref())) {
 		warn!("failed to set ambient capability");
 	}
 

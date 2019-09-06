@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use crate::device::{online_device, ROOT_BUS_PATH, SYSFS_DIR, SCSI_HOST_CHANNEL, SCSI_BLOCK_SUFFIX};
+use crate::device::{online_device, ROOT_BUS_PATH, SYSFS_DIR, SCSI_BLOCK_SUFFIX};
 use crate::grpc::SYSFS_MEMORY_ONLINE_PATH;
 use crate::netlink::{RtnlHandle, NETLINK_UEVENT};
 use crate::sandbox::Sandbox;
@@ -52,13 +52,12 @@ fn parse_uevent(message: &str) -> Uevent {
 }
 
 pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
-    let s = sandbox.clone();
 
     thread::spawn(move || {
         let rtnl = RtnlHandle::new(NETLINK_UEVENT, 1).unwrap();
         loop {
             match rtnl.recv_message() {
-                Err(e) => error!("receive uevent message failed"),
+                Err(_) => error!("receive uevent message failed"),
                 Ok(data) => {
                     let text = String::from_utf8(data);
                     match text {
@@ -99,7 +98,7 @@ pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
                                     })
                                     .map(|(k, sender)| {
                                         let devname = event.devname.clone();
-                                        sender.send(devname);
+                                        let _ = sender.send(devname);
                                         k.clone()
                                     })
                                     .collect();
@@ -114,7 +113,7 @@ pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
                                     // Check memory hotplug and online if possible
                                     match online_device(online_path.as_ref()) {
                                         Ok(_) => (),
-                                        Err(e) => error!("failed online device {}", &event.devpath),
+                                        Err(_) => error!("failed online device {}", &event.devpath),
                                     }
                                 }
                             }
