@@ -76,10 +76,23 @@ lazy_static! {
         Arc::new(Mutex::new(HashMap::new()));
 }
 
+use std::mem::MaybeUninit;
+
 fn main() -> Result<()> {
     simple_logging::log_to_stderr(LevelFilter::Info);
 	// simple_logging::log_to_file("/run/log.agent", LevelFilter::Info);
     env::set_var("RUST_BACKTRACE", "full");
+
+	lazy_static::initialize(&SHELLS);
+	parse_cmdline()?;
+
+	let shell_handle = if unsafe { DEBUG_CONSOLE } {
+		thread::spawn(move || {
+			let _ = setup_debug_console();
+		})
+	} else {
+		unsafe { MaybeUninit::zeroed().assume_init() }
+	};
 
     if unistd::getpid() == Pid::from_raw(1) {
         init_agent_as_init()?;
@@ -121,6 +134,10 @@ fn main() -> Result<()> {
     // let _ = rx.wait();
 	
 	handle.join().unwrap();
+
+	if unsafe { DEBUG_CONSOLE } {
+		shell_handle.join().unwrap();
+	}
 
     let _ = server.shutdown().wait();
     let _ = fs::remove_file("/tmp/testagent");
@@ -193,4 +210,68 @@ fn init_agent_as_init() -> Result<()> {
     env::set_var("PATH", "/bin:/sbin/:/usr/bin/:/usr/sbin/");
 
     Ok(())
+}
+
+const LOG_LEVEL_FLAG: &'static str = "agent.log";
+const DEV_MODE_FLAG: &'static str = "agent.devmode";
+const TRACE_MODE_FLAG: &'static str = "agent.trace";
+const USE_VSOCK_FLAG: &'static str = "agent.use_vsock";
+const DEBUG_CONSOLE_FLAG: &'static str = "agent.debug_console";
+const KERNEL_CMDLINE_FILE: &'static str = "/proc/cmdline";
+const CONSOLE_PATH: &'static str = "/dev/console";
+
+lazy_static! {
+	static ref SHELLS: Vec<String> = {
+		let mut v = Vec::new();
+		v.push("/bin/bash".to_string());
+		v.push("/bin/sh".to_string());
+		v
+	};
+}
+
+pub static mut DEBUG_CONSOLE: bool = false;
+// pub static mut LOG_LEVEL: ;
+pub static mut DEV_MODE: bool = false;
+// pub static mut TRACE_MODE: ;
+
+fn parse_cmdline() -> Result<()> {
+	let cmdline = fs::read_to_string(KERNEL_CMDLINE_FILE)?;
+	let params: Vec<&str> = cmdline.split_ascii_whitespace().collect();
+	for param in params.iter() {
+		if param.starts_with(DEBUG_CONSOLE_FLAG) {
+			unsafe { DEBUG_CONSOLE = true; }
+		}
+
+		if param.starts_with(DEV_MODE_FLAG) {
+			unsafe { DEV_MODE = true; }
+		}
+	}
+
+	Ok(())
+}
+
+use std::process::{Command, Stdio};
+use std::path::PathBuf;
+use nix::fcntl::{self, OFlag};
+use nix::sys::stat::Mode;
+use std::os::unix::io::{RawFd, FromRawFd};
+
+fn setup_debug_console() -> Result<()> {
+	for shell in SHELLS.iter() {
+		let binary = PathBuf::from(shell);
+		if binary.exists() {
+			let f: RawFd = fcntl::open(CONSOLE_PATH, OFlag::O_RDWR, Mode::empty())?;
+			let mut cmd = Command::new(shell)
+						.stdin(unsafe { Stdio::from_raw_fd(f) })
+						.stdout(unsafe { Stdio::from_raw_fd(f) })
+						.stderr(unsafe { Stdio::from_raw_fd(f) })
+						.spawn()?;
+			cmd.wait()?;
+
+			return Ok(())
+		}
+	}
+	
+	// no shell
+	Err(ErrorKind::ErrorCode("no shell".to_string()).into())
 }
