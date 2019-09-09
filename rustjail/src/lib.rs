@@ -43,6 +43,7 @@ pub mod mount;
 pub mod specconv;
 // pub mod sync;
 pub mod capabilities;
+pub mod validator;
 
 // pub mod factory;
 //pub mod configs;

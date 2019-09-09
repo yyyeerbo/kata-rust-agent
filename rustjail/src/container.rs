@@ -25,7 +25,7 @@ use crate::cgroups::Manager as CgroupManager;
 use crate::specconv::CreateOpts;
 use crate::errors::*;
 // use crate::stats::Stats;
-use crate::mount;
+use crate::{mount, validator};
 use crate::cgroups::fs::{Manager as FsManager, self as fscgroup};
 use crate::capabilities::{self, CAPSMAP};
 
@@ -53,7 +53,7 @@ const EXEC_FIFO_FILENAME: &'static str = "exec.fifo";
 const VER_MARKER: &'static str = "1.2.5";
 
 type Status = Option<String>;
-type Config = CreateOpts;
+pub type Config = CreateOpts;
 type NamespaceType = String;
 
 /*
@@ -1089,6 +1089,10 @@ fn setup_stdio(p: &Process) -> Result<()> {
 fn write_mappings(path: &str, maps: &[LinuxIDMapping]) -> Result<()> {
     let mut data = String::new();
     for m in maps {
+		if m.Size == 0 {
+			continue;
+		}
+
         let val = format!("{} {} {}\n", m.ContainerID, m.HostID, m.Size);
         data = data + &val;
     }
@@ -1137,6 +1141,9 @@ impl LinuxContainer
 		let base = base.into();
 		let id = id.into();
 		let root = format!("{}/{}", base.as_str(), id.as_str());
+
+		// validate oci spec
+		validator::validate(&config)?;
 
 		if let Err(e) = fs::create_dir_all(root.as_str()) {
 			if e.kind() == std::io::ErrorKind::AlreadyExists {
