@@ -145,6 +145,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+use nix::sys::wait::WaitPidFlag;
+
 fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()>{
     set_child_subreaper(true)
         .map_err(|err | format!("failed  to setup agent as a child subreaper, failed with {}", err))?;
@@ -154,42 +156,61 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()>{
     let s = sandbox.clone();
 
     thread::spawn(move || {
-        for sig in signals.forever() {
+        'outer: for sig in signals.forever() {
             info!("Received signal {:?}", sig);
 
-            let wait_status = wait::wait().unwrap();
-            let pid = wait_status.pid();
-            if pid.is_some() {
-                let raw_pid = pid.unwrap().as_raw();
-                let mut sandbox = s.lock().unwrap();
-                let process = sandbox.find_process(raw_pid);
-                if process.is_none() {
-                    info!("unexpected child exited {}", raw_pid);
-                    continue;
-                }
+			// sevral signals can be combined together
+			// as one. So loop around to reap all
+			// exited children
+			'inner: loop {
+	            let wait_status = match wait::waitpid(Some(Pid::from_raw(-1)),
+						Some(WaitPidFlag::WNOHANG | WaitPidFlag::__WALL)) {
+					Ok(s) => {
+						if s == WaitStatus::StillAlive {
+							continue 'outer;
+						}
+						s
+					}
+					Err(e) => {
+						info!("reaper: waitpid error: {}",
+							e.as_errno().unwrap().desc());
+						continue 'outer;
+					}
+				};
 
-                let mut p = process.unwrap();
-
-                if p.exit_pipe_w.is_none() {
-                    error!("the process's exit_pipe_w isn't set");
-                    continue;
-                }
-                let pipe_write = p.exit_pipe_w.unwrap();
-                let ret: i32;
-
-                match wait_status {
-                    WaitStatus::Exited(_, c) => ret = c,
-                    WaitStatus::Signaled(_, sig, _) => ret = sig as i32,
-                    _ => {
-                        info!("got wrong status for process {}", raw_pid);
-                        continue;
-                    }
-                }
-
-                p.exit_code = ret;
-                let _ = unistd::close(pipe_write);
-            }
-        }
+	            let pid = wait_status.pid();
+	            if pid.is_some() {
+	                let raw_pid = pid.unwrap().as_raw();
+	                let mut sandbox = s.lock().unwrap();
+	                let process = sandbox.find_process(raw_pid);
+	                if process.is_none() {
+	                    info!("unexpected child exited {}", raw_pid);
+	                    continue 'inner;
+	                }
+	
+	                let mut p = process.unwrap();
+	
+	                if p.exit_pipe_w.is_none() {
+	                    error!("the process's exit_pipe_w isn't set");
+	                    continue 'inner;
+	                }
+	                let pipe_write = p.exit_pipe_w.unwrap();
+	                let ret: i32;
+	
+	                match wait_status {
+	                    WaitStatus::Exited(_, c) => ret = c,
+	                    WaitStatus::Signaled(_, sig, _) => ret = sig as i32,
+	                    _ => {
+	                        info!("got wrong status for process {}", raw_pid);
+	                        continue 'inner;
+	                    }
+	                }
+	
+	                p.exit_code = ret;
+	                let _ = unistd::close(pipe_write);
+	            }
+	        }
+		}
     });
 	Ok(())
 }

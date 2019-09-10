@@ -5,9 +5,9 @@
 
 use serde_json;
 use lazy_static;
-use protocols::oci::{Spec, Linux, LinuxNamespace, LinuxResources, POSIXRlimit};
+use protocols::oci::{Spec, Linux, LinuxNamespace, LinuxResources, POSIXRlimit, Hook};
 use std::time::SystemTime;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs;
 use std::mem;
 use std::os::unix::io::RawFd;
@@ -17,6 +17,7 @@ use protocols::oci::{LinuxDevice, LinuxIDMapping};
 use libc::pid_t;
 use std::fmt::Display;
 use std::clone::Clone;
+use std::process::Command;
 
 // use crate::configs::namespaces::{NamespaceType};
 use crate::process::Process;
@@ -263,7 +264,25 @@ impl BaseContainer for LinuxContainer
 	}
 
 	fn oci_state(&self) -> Result<OCIState> {
-		Err(ErrorKind::ErrorCode("not supported".to_string()).into())
+		let oci = self.config.spec.as_ref().unwrap();
+		let status = self.status().unwrap().unwrap();
+		let pid = if status != "stopped".to_string() {
+			self.init_process_pid
+		} else {
+			0
+		};
+
+		let root = oci.Root.as_ref().unwrap().Path.as_str();
+		let path = fs::canonicalize(root)?;
+		let bundle = path.parent().unwrap().to_str().unwrap().to_string();
+		Ok(OCIState {
+			version: oci.Version.clone(),
+			id: self.id(),
+			status,
+			pid,
+			bundle,
+			annotations: oci.Annotations.clone()
+		})
 	}
 
 	fn config(&self) -> Result<&Config> {
@@ -383,9 +402,10 @@ impl BaseContainer for LinuxContainer
 		}
 
 		let mut parent: u32 = 0;
+		let st = self.oci_state()?;
 
 		let (child, cfd) = match join_namespaces(&spec,
-			to_new, &to_join, pidns, userns, p.init, self.config.no_pivot_root,self.cgroup_manager.as_ref().unwrap(), &mut parent) {
+			to_new, &to_join, pidns, userns, p.init, self.config.no_pivot_root,self.cgroup_manager.as_ref().unwrap(), &st, &mut parent) {
 			Ok((u, v)) => (u, v),
 			Err(e) => {
 				if parent == 0 {
@@ -573,12 +593,22 @@ impl BaseContainer for LinuxContainer
 	}
 
 	fn destroy(&mut self) -> Result<()> {
+		let spec = self.config.spec.as_ref().unwrap();
+		let st = self.oci_state()?;
+
 		for pid in self.processes.keys() {
 			signal::kill(Pid::from_raw(*pid), Some(Signal::SIGKILL))?;
 		}
 
-		self.status = Some("stopped".to_string());
+		if spec.Hooks.is_some() {
+			info!("poststop");
+			let hooks = spec.Hooks.as_ref().unwrap();
+			for h in hooks.Poststop.iter() {
+				execute_hook(h, &st)?;
+			}
+		}
 
+		self.status = Some("stopped".to_string());
 		Ok(())
 	}
 
@@ -743,7 +773,7 @@ fn write_sync(fd: RawFd, pid: pid_t) -> Result<()>
 	Ok(())
 }
 
-fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool, no_pivot: bool, cm: &FsManager, parent: &mut u32) -> Result<(Pid, RawFd)>
+fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, RawFd)>, pidns: bool, userns: bool, init: bool, no_pivot: bool, cm: &FsManager, st: &OCIState, parent: &mut u32) -> Result<(Pid, RawFd)>
 {
 	// let ccond = Cond::new().chain_err(|| "create cond failed")?;
 	// let pcond = Cond::new().chain_err(|| "create cond failed")?;
@@ -820,7 +850,15 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 			if init {
 				info!("wait for hook!");
 				let _ = read_sync(pfd)?;
+
 				// run prestart hook
+				if spec.Hooks.is_some() {
+					info!("prestart");
+					let hooks = spec.Hooks.as_ref().unwrap();
+					for h in hooks.Prestart.iter() {
+						execute_hook(h, st)?;
+					}
+				}
 
 				// notify child run prestart hooks completed
 				write_sync(pwfd, 0)?;
@@ -828,6 +866,13 @@ fn join_namespaces(spec: &Spec, to_new: CloneFlags, to_join: &Vec<(CloneFlags, R
 				// wait to run poststart hook
 				let _ = read_sync(pfd)?;
 				//run poststart hook
+				if spec.Hooks.is_some() {
+					info!("poststart");
+					let hooks = spec.Hooks.as_ref().unwrap();
+					for h in hooks.Poststart.iter() {
+						execute_hook(h, st)?;
+					}
+				}
 			}
 			unistd::close(pfd)?;
 			unistd::close(pwfd)?;
@@ -1313,4 +1358,149 @@ fn set_sysctls(sysctls: &HashMap<String, String>) -> Result<()> {
 	}
 
 	Ok(())
+}
+
+use std::thread;
+use std::time::Duration;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::process::Stdio;
+use std::os::unix::process::ExitStatusExt;
+use std::io::Read;
+use std::error::Error as StdError;
+
+fn execute_hook(h: &Hook, st: &OCIState) -> Result<()> {
+	let binary = PathBuf::from(h.Path.as_str());
+	let path = binary.canonicalize()?;
+	if !path.exists() {
+		return Err(ErrorKind::Nix(Error::from_errno(Errno::EINVAL)).into());
+	}
+
+	let args = h.Args.clone();
+	let envs = h.Env.clone();
+	let state = serde_json::to_string(st)?;
+//	state.push_str("\n");
+
+	let (rfd, wfd) = unistd::pipe2(OFlag::O_CLOEXEC)?;
+	match unistd::fork()? {
+		ForkResult::Parent { child: _ch } => {
+			let status = read_sync(rfd)?;
+
+			info!("hook child: {}", _ch);
+			// let _ = wait::waitpid(_ch,
+			//	Some(WaitPidFlag::WEXITED | WaitPidFlag::__WALL));
+
+			if status != 0 {
+				if status == -libc::ETIMEDOUT {
+					return Err(ErrorKind::Nix(Error::from_errno(
+						Errno::ETIMEDOUT)).into());
+				} else if status == -libc::EPIPE {
+					return Err(ErrorKind::Nix(Error::from_errno(
+						Errno::EPIPE)).into());
+				} else {
+					return Err(ErrorKind::Nix(Error::from_errno(
+						Errno::UnknownErrno)).into());
+				}
+			}
+
+			return Ok(());
+		}
+
+		ForkResult::Child => {
+			let (tx, rx) = mpsc::channel();
+
+			let handle = thread::spawn(move || {
+				// write oci state to child
+				let env: HashMap<String, String>= envs.iter()
+				.map(|e| {
+					let v: Vec<&str> = e.split('=').collect();
+					(v[0].to_string(), v[1].to_string())
+				}).collect();
+
+				let mut child = Command::new(path.to_str().unwrap())
+							.args(args.iter())
+							.envs(env.iter())
+							.stdin(Stdio::piped())
+							.stdout(Stdio::piped())
+							.stderr(Stdio::piped())
+							.spawn()
+							.unwrap();
+
+				//send out our pid
+				tx.send(child.id() as libc::pid_t).unwrap();
+				info!("hook grand: {}", child.id());
+
+				child.stdin.as_mut().unwrap().write_all(state.as_bytes()).unwrap();
+
+				// read something from stdout for debug
+				let mut out = String::new();
+				child.stdout.as_mut().unwrap().read_to_string(&mut out).unwrap();
+				info!("{}", out.as_str());
+				match child.wait() {
+					Ok(exit) => {
+						let code: i32 = if exit.success() {
+							0
+						} else {
+							match exit.code() {
+								Some(c) => (c as u32| 0x80000000) as i32,
+								None => {
+									exit.signal().unwrap()
+								}
+							}
+						};
+
+						tx.send(code).unwrap();
+					}
+
+					Err(e) => {
+						info!("wait child error: {} {}", e.description(),
+						e.raw_os_error().unwrap());
+
+						// There is apparently race between this wait and
+						// child reaper. Ie, the child can already
+						// be reaped by subreaper, child.wait returns
+						// ECHILD. I have no idea how to get the
+						// correct exit status here at present,
+						// just pretend it exits successfully.
+						// -- FIXME
+						// just in case. Should not happen any more
+
+						tx.send(0).unwrap();
+					}
+				}
+			});
+
+			let pid = rx.recv().unwrap();
+			info!("hook grand: {}", pid);
+
+			let status: i32 = if h.Timeout > 0 {
+				match rx.recv_timeout(Duration::from_secs(h.Timeout as u64)) {
+					Ok(s) => s,
+					Err(e) => {
+						let error = if e == RecvTimeoutError::Timeout {
+							-libc::ETIMEDOUT
+						} else {
+							-libc::EPIPE
+						};
+						let _ = signal::kill(Pid::from_raw(pid),
+							Some(Signal::SIGKILL));
+						error
+					}
+				}
+			} else {
+				if let Ok(s) = rx.recv() {
+					s
+				} else {
+					let _ = signal::kill(Pid::from_raw(pid),
+						Some(Signal::SIGKILL));
+					-libc::EPIPE
+				}
+			};
+		
+			handle.join().unwrap();
+			let _ = write_sync(wfd, status);
+			// let _ = wait::waitpid(Pid::from_raw(pid),
+			//	Some(WaitPidFlag::WEXITED | WaitPidFlag::__WALL));
+			std::process::exit(0);
+		}
+	}
 }
