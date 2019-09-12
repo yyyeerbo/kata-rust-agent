@@ -5,11 +5,11 @@
 
 use rustjail::errors::*;
 use std::collections::HashMap;
-use std::ffi::{CString};
+use std::ffi::CString;
 use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
 use std::iter::FromIterator;
+use std::os::unix::fs::PermissionsExt;
 
 use std::path::Path;
 use std::ptr::null;
@@ -35,7 +35,7 @@ pub const DRIVERNVDIMMTYPE: &'static str = "nvdimm";
 const DRIVEREPHEMERALTYPE: &'static str = "ephemeral";
 const DRIVERLOCALTYPE: &'static str = "local";
 
-pub const TYPEROOTFS: &'static str   = "rootfs";
+pub const TYPEROOTFS: &'static str = "rootfs";
 
 pub const PROCMOUNTSTATS: &'static str = "/proc/self/mountstats";
 
@@ -91,7 +91,7 @@ pub struct INIT_MOUNT {
     fstype: &'static str,
     src: &'static str,
     dest: &'static str,
-    options: Vec<&'static str>
+    options: Vec<&'static str>,
 }
 
 #[cfg_attr(rustfmt, rustfmt_skip)]
@@ -213,20 +213,26 @@ impl<'a> BareMount<'a> {
             options = cstr_options.as_ptr() as *const c_void;
         }
 
-        info!("mount source={:?}, dest={:?}, fs_type={:?}, options={:?}", self.source, self.destination, self.fs_type, self.options);
+        info!(
+            "mount source={:?}, dest={:?}, fs_type={:?}, options={:?}",
+            self.source, self.destination, self.fs_type, self.options
+        );
         let rc = unsafe { mount(source, dest, fs_type, self.flags.bits(), options) };
 
         if rc < 0 {
-            return Err(ErrorKind::ErrorCode(format!("failed to mount {:?} to {:?}, with error: {}", self.source, self.destination, io::Error::last_os_error())).into());
+            return Err(ErrorKind::ErrorCode(format!(
+                "failed to mount {:?} to {:?}, with error: {}",
+                self.source,
+                self.destination,
+                io::Error::last_os_error()
+            ))
+            .into());
         }
         Ok(())
     }
 }
 
-fn ephemeral_storage_handler(
-    storage: &Storage,
-    sandbox: Arc<Mutex<Sandbox>>,
-) -> Result<String> {
+fn ephemeral_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
     let s = sandbox.clone();
     let mut sb = s.lock().unwrap();
     let new_storage = sb.set_sandbox_storage(&storage.mount_point);
@@ -242,10 +248,7 @@ fn ephemeral_storage_handler(
     common_storage_handler(storage)
 }
 
-fn local_storage_handler(
-    storage: &Storage,
-    sandbox: Arc<Mutex<Sandbox>>,
-) -> Result<String> {
+fn local_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
     let s = sandbox.clone();
     let mut sb = s.lock().unwrap();
     let new_storage = sb.set_sandbox_storage(&storage.mount_point);
@@ -292,11 +295,7 @@ fn virtiofs_storage_handler(storage: &Storage, _sandbox: Arc<Mutex<Sandbox>>) ->
 }
 
 // virtio_blk_storage_handler handles the storage for blk driver.
-fn virtio_blk_storage_handler(
-    storage: &Storage,
-    sandbox: Arc<Mutex<Sandbox>>,
-) -> Result<String> {
-
+fn virtio_blk_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
     let mut storage = storage.clone();
     // If hot-plugged, get the device node path based on the PCI address else
     // use the virt path provided in Storage Source
@@ -316,11 +315,7 @@ fn virtio_blk_storage_handler(
 }
 
 // virtio_scsi_storage_handler handles the storage for scsi driver.
-fn virtio_scsi_storage_handler(
-    storage: &Storage,
-    sandbox: Arc<Mutex<Sandbox>>,
-) -> Result<String> {
-
+fn virtio_scsi_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
     let mut storage = storage.clone();
 
     // Retrieve the device path from SCSI address.
@@ -347,8 +342,8 @@ fn mount_storage(storage: &Storage) -> Result<()> {
             }
         }
         _ => {
-            ensure_destination_exists( storage.mount_point.as_str(), storage.fstype.as_str())?;
-        },
+            ensure_destination_exists(storage.mount_point.as_str(), storage.fstype.as_str())?;
+        }
     }
 
     let options_vec = storage.options.to_vec();
@@ -439,13 +434,7 @@ fn mount_to_rootfs(m: &INIT_MOUNT) -> Result<()> {
 
     let (flags, options) = parse_mount_flags_and_options(options_vec);
 
-    let bare_mount = BareMount::new(
-        m.src,
-        m.dest,
-        m.fstype,
-        flags,
-        options.as_str(),
-    );
+    let bare_mount = BareMount::new(m.src, m.dest, m.fstype, flags, options.as_str());
 
     fs::create_dir_all(Path::new(m.dest)).chain_err(|| "could not creat directory")?;
 
@@ -477,14 +466,15 @@ pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
     let file = File::open(PROCMOUNTSTATS)?;
     let reader = BufReader::new(file);
 
-    let re = Regex::new(format!("device .+ mounted on {} with fstype (.+)", mount_point).as_str()).unwrap();
+    let re = Regex::new(format!("device .+ mounted on {} with fstype (.+)", mount_point).as_str())
+        .unwrap();
 
     // Read the file line by line using the lines() iterator from std::io::BufRead.
     for (_index, line) in reader.lines().enumerate() {
         let line = line?;
         let capes = match re.captures(line.as_str()) {
             Some(c) => c,
-            None => continue
+            None => continue,
         };
 
         if capes.len() > 1 {
@@ -492,7 +482,11 @@ pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
         }
     }
 
-    Err(ErrorKind::ErrorCode(format!("failed to find FS type for mount point {}", mount_point)).into())
+    Err(ErrorKind::ErrorCode(format!(
+        "failed to find FS type for mount point {}",
+        mount_point
+    ))
+    .into())
 }
 
 pub fn get_cgroup_mounts(cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
@@ -504,7 +498,7 @@ pub fn get_cgroup_mounts(cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
         fstype: "tmpfs",
         src: "tmpfs",
         dest: CGROUPPATH,
-        options: vec!["nosuid", "nodev", "noexec", "mode=755"]
+        options: vec!["nosuid", "nodev", "noexec", "mode=755"],
     }];
 
     for (_, line) in reader.lines().enumerate() {
@@ -513,7 +507,7 @@ pub fn get_cgroup_mounts(cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
         let fields: Vec<&str> = line.split("\t").collect();
         // #subsys_name    hierarchy       num_cgroups     enabled
         // fields[0]       fields[1]       fields[2]       fields[3]
-        match CGROUPS.get_key_value(fields[0]){
+        match CGROUPS.get_key_value(fields[0]) {
             Some((key, value)) => {
                 if *key == "" || key.starts_with("#") || (fields.len() > 3 && fields[3] == "0") {
                     continue;
@@ -527,12 +521,12 @@ pub fn get_cgroup_mounts(cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
                     fstype: "cgroup",
                     src: "cgroup",
                     dest: *value,
-                    options: vec!["nosuid", "nodev", "noexec", "relatime", *key]
+                    options: vec!["nosuid", "nodev", "noexec", "relatime", *key],
                 });
             }
-            None => continue
+            None => continue,
         }
-    };
+    }
 
     if !has_device_cgroup {
         warn!("The system didn't support device cgroup, which is dangerous, thus agent initialized without cgroup support!\n");
@@ -543,14 +537,14 @@ pub fn get_cgroup_mounts(cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
         fstype: "tmpfs",
         src: "tmpfs",
         dest: CGROUPPATH,
-        options: vec!["remount", "ro", "nosuid", "nodev", "noexec", "mode=755"]
+        options: vec!["remount", "ro", "nosuid", "nodev", "noexec", "mode=755"],
     });
 
     Ok(cg_mounts)
 }
 
 pub fn cgroups_mount() -> Result<()> {
-   let cgroups = get_cgroup_mounts(PROCCGROUPS)?;
+    let cgroups = get_cgroup_mounts(PROCCGROUPS)?;
 
     for cg in cgroups.iter() {
         mount_to_rootfs(cg)?;
@@ -571,26 +565,31 @@ pub fn remove_mounts(mounts: &Vec<String>) -> Result<()> {
 
 // ensureDestinationExists will recursively create a given mountpoint. If directories
 // are created, their permissions are initialized to mountPerm
-fn ensure_destination_exists(destination: &str, fs_type: &str)  -> Result<()> {
+fn ensure_destination_exists(destination: &str, fs_type: &str) -> Result<()> {
     let d = Path::new(destination);
     if !d.exists() {
         let dir = match d.parent() {
             Some(d) => d,
-            None => return Err(ErrorKind::ErrorCode(format!("mount destination {} doesn't exist", destination)).into())
+            None => {
+                return Err(ErrorKind::ErrorCode(format!(
+                    "mount destination {} doesn't exist",
+                    destination
+                ))
+                .into())
+            }
         };
         if !dir.exists() {
             fs::create_dir_all(dir)?;
         }
     }
 
-    if fs_type  != "bind" || d.is_dir() {
+    if fs_type != "bind" || d.is_dir() {
         fs::create_dir_all(d)?;
     } else {
         fs::OpenOptions::new().create(true).open(d)?;
     }
 
     Ok(())
-
 }
 
 fn parse_options(option_list: Vec<String>) -> HashMap<String, String> {

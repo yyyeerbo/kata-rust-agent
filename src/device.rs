@@ -6,15 +6,17 @@
 use rustjail::errors::*;
 use std::fs;
 // use std::io::Write;
+use libc::{c_uint, major, minor};
+use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::path::Path;
-use std::collections::HashMap;
-use std::os::unix::fs::MetadataExt;
-use libc::{major, minor, c_uint};
 
-use crate::mount::{TIMEOUT_HOTPLUG, DRIVERBLKTYPE, DRIVERMMIOBLKTYPE, DRIVERNVDIMMTYPE, DRIVERSCSITYPE};
+use crate::mount::{
+    DRIVERBLKTYPE, DRIVERMMIOBLKTYPE, DRIVERNVDIMMTYPE, DRIVERSCSITYPE, TIMEOUT_HOTPLUG,
+};
 use crate::sandbox::Sandbox;
 use crate::GLOBAL_DEVICE_WATCHER;
 use protocols::agent::Device;
@@ -74,7 +76,7 @@ pub fn rescan_pci_bus() -> Result<()> {
 }
 
 pub fn online_device(path: &str) -> Result<()> {
-   fs::write(path, "1")?;
+    fs::write(path, "1")?;
     Ok(())
 }
 
@@ -133,7 +135,7 @@ pub fn get_device_pci_address(pci_id: &str) -> Result<String> {
     Ok(bridge_device_pci_addr)
 }
 
-pub fn get_device_name(sandbox: Arc<Mutex<Sandbox>>, dev_addr: &str, ) -> Result<String> {
+pub fn get_device_name(sandbox: Arc<Mutex<Sandbox>>, dev_addr: &str) -> Result<String> {
     let mut dev_name: String = String::default();
     let (tx, rx) = mpsc::channel::<String>();
 
@@ -176,7 +178,7 @@ pub fn get_device_name(sandbox: Arc<Mutex<Sandbox>>, dev_addr: &str, ) -> Result
                     "Timeout reached after {} waiting for device {}",
                     TIMEOUT_HOTPLUG, dev_addr
                 ))
-                    .into());
+                .into());
             }
         }
     }
@@ -204,7 +206,11 @@ pub fn get_pci_device_name(sandbox: Arc<Mutex<Sandbox>>, pci_id: &str) -> Result
 pub fn scan_scsi_bus(scsi_addr: &str) -> Result<()> {
     let tokens: Vec<&str> = scsi_addr.split(":").collect();
     if tokens.len() != 2 {
-        return Err(ErrorKind::Msg(format!("Unexpected format for SCSI Address: {}, expect SCSIID:LUA", scsi_addr)).into());
+        return Err(ErrorKind::Msg(format!(
+            "Unexpected format for SCSI Address: {}, expect SCSIID:LUA",
+            scsi_addr
+        ))
+        .into());
     }
 
     // Scan scsi host passing in the channel, SCSI id and LUN. Channel
@@ -230,8 +236,8 @@ pub fn scan_scsi_bus(scsi_addr: &str) -> Result<()> {
 // This is needed to update information about minor/major numbers that cannot
 // be predicted from the caller.
 fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
-// If no container_path is provided, we won't be able to match and
-// update the device in the OCI spec device list. This is an error.
+    // If no container_path is provided, we won't be able to match and
+    // update the device in the OCI spec device list. This is an error.
 
     let major_id: c_uint;
     let minor_id: c_uint;
@@ -239,15 +245,23 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
     // If no container_path is provided, we won't be able to match and
     // update the device in the OCI spec device list. This is an error.
     if device.container_path == "" {
-        return Err(ErrorKind::Msg(format!("container_path  cannot empty for device {:?}", device)).into());
+        return Err(ErrorKind::Msg(format!(
+            "container_path  cannot empty for device {:?}",
+            device
+        ))
+        .into());
     }
 
     let linux = match spec.Linux.as_mut() {
-        None => return Err(ErrorKind::ErrorCode("Spec didn't container linux field".to_string()).into()),
-        Some(l) => l
+        None => {
+            return Err(
+                ErrorKind::ErrorCode("Spec didn't container linux field".to_string()).into(),
+            )
+        }
+        Some(l) => l,
     };
 
-    if ! Path::new(&device.vm_path).exists() {
+    if !Path::new(&device.vm_path).exists() {
         return Err(ErrorKind::Msg(format!("vm_path:{} doesn't exist", device.vm_path)).into());
     }
 
@@ -258,7 +272,10 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
         minor_id = minor(dev_id);
     }
 
-    info!("got the device: dev_path: {}, major: {}, minor: {}\n", &device.vm_path, major_id, minor_id);
+    info!(
+        "got the device: dev_path: {}, major: {}, minor: {}\n",
+        &device.vm_path, major_id, minor_id
+    );
 
     let devices = linux.Devices.as_mut_slice();
     for dev in devices.iter_mut() {
@@ -269,7 +286,10 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
             dev.Major = major_id as i64;
             dev.Minor = minor_id as i64;
 
-            info!("change the device from major: {} minor: {} to vm device major: {} minor: {}", host_major, host_minor, major_id, minor_id);
+            info!(
+                "change the device from major: {} minor: {} to vm device major: {} minor: {}",
+                host_major, host_minor, major_id, minor_id
+            );
 
             // Resources must be updated since they are used to identify the
             // device in the devices cgroup.
@@ -282,7 +302,10 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
                         d.Major = major_id as i64;
                         d.Minor = minor_id as i64;
 
-                        info!("set resources for device major: {} minor: {}\n", major_id, minor_id);
+                        info!(
+                            "set resources for device major: {} minor: {}\n",
+                            major_id, minor_id
+                        );
                     }
                 }
             }
@@ -294,7 +317,11 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
 
 // device.Id should be the predicted device name (vda, vdb, ...)
 // device.VmPath already provides a way to send it in
-fn virtiommio_blk_device_handler(device: &Device, spec: &mut Spec, _sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+fn virtiommio_blk_device_handler(
+    device: &Device,
+    spec: &mut Spec,
+    _sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<()> {
     if device.vm_path == "" {
         return Err(ErrorKind::Msg("Invalid path for virtiommioblkdevice".to_string()).into());
     }
@@ -305,17 +332,25 @@ fn virtiommio_blk_device_handler(device: &Device, spec: &mut Spec, _sandbox: Arc
 // device.Id should be the PCI address in the format  "bridgeAddr/deviceAddr".
 // Here, bridgeAddr is the address at which the brige is attached on the root bus,
 // while deviceAddr is the address at which the device is attached on the bridge.
-fn virtio_blk_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
-    let dev_path  = get_pci_device_name(sandbox, device.id.as_str())?;
+fn virtio_blk_device_handler(
+    device: &Device,
+    spec: &mut Spec,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<()> {
+    let dev_path = get_pci_device_name(sandbox, device.id.as_str())?;
 
     let mut dev = device.clone();
-    dev.vm_path  = dev_path;
+    dev.vm_path = dev_path;
 
     update_spec_device_list(&dev, spec)
 }
 
 // device.Id should be the SCSI address of the disk in the format "scsiID:lunID"
-fn virtio_scsi_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+fn virtio_scsi_device_handler(
+    device: &Device,
+    spec: &mut Spec,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<()> {
     let dev_path = get_scsi_device_name(sandbox, device.id.as_str())?;
 
     let mut dev = device.clone();
@@ -324,11 +359,19 @@ fn virtio_scsi_device_handler(device: &Device, spec: &mut Spec, sandbox: Arc<Mut
     update_spec_device_list(&dev, spec)
 }
 
-fn virtio_nvdimm_device_handler(device: &Device, spec: &mut Spec, _sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+fn virtio_nvdimm_device_handler(
+    device: &Device,
+    spec: &mut Spec,
+    _sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<()> {
     update_spec_device_list(device, spec)
 }
 
-pub fn add_devices(devices: Vec<Device>, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+pub fn add_devices(
+    devices: Vec<Device>,
+    spec: &mut Spec,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<()> {
     for device in devices.iter() {
         add_device(device, spec, sandbox.clone())?;
     }
@@ -347,16 +390,22 @@ fn add_device(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) ->
     }
 
     if device.id == "" && device.vm_path == "" {
-        return Err(ErrorKind::Msg(format!("invalid ID and VM path for device {:?}", device)).into());
+        return Err(
+            ErrorKind::Msg(format!("invalid ID and VM path for device {:?}", device)).into(),
+        );
     }
 
     if device.container_path == "" {
-        return Err(ErrorKind::Msg(format!("invalid container path for device {:?}", device)).into());
+        return Err(
+            ErrorKind::Msg(format!("invalid container path for device {:?}", device)).into(),
+        );
     }
 
     let dev_handler = match DEVICEHANDLERLIST.get(device.field_type.as_str()) {
-        None => return Err(ErrorKind::Msg(format!("Unknown device type {}", device.field_type)).into()),
-        Some(t) => t
+        None => {
+            return Err(ErrorKind::Msg(format!("Unknown device type {}", device.field_type)).into())
+        }
+        Some(t) => t,
     };
 
     dev_handler(device, spec, sandbox)

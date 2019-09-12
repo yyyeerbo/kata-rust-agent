@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-use crate::device::{online_device, ROOT_BUS_PATH, SYSFS_DIR, SCSI_BLOCK_SUFFIX};
+use crate::device::{online_device, ROOT_BUS_PATH, SCSI_BLOCK_SUFFIX, SYSFS_DIR};
 use crate::grpc::SYSFS_MEMORY_ONLINE_PATH;
 use crate::netlink::{RtnlHandle, NETLINK_UEVENT};
 use crate::sandbox::Sandbox;
@@ -52,7 +52,6 @@ fn parse_uevent(message: &str) -> Uevent {
 }
 
 pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
-
     thread::spawn(move || {
         let rtnl = RtnlHandle::new(NETLINK_UEVENT, 1).unwrap();
         loop {
@@ -67,7 +66,10 @@ pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
                             info!("got uevent message: {:?}", event);
 
                             // Check if device hotplug event results in a device node being created.
-                            if event.devname != "" && event.devpath.starts_with(ROOT_BUS_PATH) && event.subsystem == "block" {
+                            if event.devname != ""
+                                && event.devpath.starts_with(ROOT_BUS_PATH)
+                                && event.subsystem == "block"
+                            {
                                 let watcher = GLOBAL_DEVICE_WATCHER.clone();
                                 let mut w = watcher.lock().unwrap();
 

@@ -322,6 +322,7 @@ impl agentService {
         }
 
         if exit_pipe_r != -1 {
+            info!("reading exit pipe");
             let _ = unistd::read(exit_pipe_r, buf.as_mut_slice());
         }
 
