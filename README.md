@@ -20,7 +20,7 @@ After that, we drafted the initial code here, and any contributions are welcome.
 | Cgroups                 | :white_check_mark: |
 | Capabilities, rlimit, readonly path, masked path, users | :white_check_mark: |
 | container stats (`stats_container`)                     | :white_check_mark: |
-| Hooks                   | :heavy_multiplication_x: |
+| Hooks                   | :white_check_mark: |
 | **Agent Features & APIs** |
 | run agent as `init` (mount fs, udev, setup `lo`) | :white_check_mark: |
 | block device as root device                      | :white_check_mark: |
@@ -30,10 +30,10 @@ After that, we drafted the initial code here, and any contributions are welcome.
 | Device APIs (`reseed_random_device`, , `online_cpu_memory`, `mem_hotplug_probe`, `set_guet_data_time`) | :white_check_mark: |
 | vsock support                                    | :white_check_mark: |
 | virtio-serial support                            | :heavy_multiplication_x: |
-| OCI Spec validator                               | :heavy_multiplication_x: |
+| OCI Spec validator                               | :white_check_mark: |
 | **Infrastructures**|
-| Debug Console | :heavy_multiplication_x: |
-| Command line  | :heavy_multiplication_x: |
+| Debug Console | :white_check_mark: |
+| Command line  | :white_check_mark: |
 | Tracing       | :heavy_multiplication_x: |
 
 ## Getting Started
