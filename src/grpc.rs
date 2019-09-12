@@ -75,8 +75,8 @@ impl agentService {
 
         let mut oci_spec = req.OCI.clone();
 
-		// sleep 5 seconds for debug
-		// thread::sleep(Duration::from_secs(5));
+        // sleep 5 seconds for debug
+        // thread::sleep(Duration::from_secs(5));
 
         let sandbox;
         let mut s;
@@ -113,48 +113,48 @@ impl agentService {
 
         update_container_namespaces(&s, oci)?;
 
-		// fake some hook to do some test
-		/*
-		let prestart = Hook {
-			Path: String::from("/bin/test_echo.sh"),
-			Args: { let mut v = RepeatedField::new();
-					v.push("prestart hook".to_string());
-					v
-			},
-			Env: RepeatedField::new(),
-			Timeout: 5,
-			unknown_fields: UnknownFields::default(),
-			cached_size: CachedSize::default(),
-		};
+        // fake some hook to do some test
+        /*
+        let prestart = Hook {
+            Path: String::from("/bin/test_echo.sh"),
+            Args: { let mut v = RepeatedField::new();
+                    v.push("prestart hook".to_string());
+                    v
+            },
+            Env: RepeatedField::new(),
+            Timeout: 5,
+            unknown_fields: UnknownFields::default(),
+            cached_size: CachedSize::default(),
+        };
 
-		let mut poststart = prestart.clone();
-		poststart.Timeout = 0;
-		poststart.Args = {
-			let mut v = RepeatedField::new();
-			v.push("poststart hook".to_string());
-			v
-		};
+        let mut poststart = prestart.clone();
+        poststart.Timeout = 0;
+        poststart.Args = {
+            let mut v = RepeatedField::new();
+            v.push("poststart hook".to_string());
+            v
+        };
 
-		let mut poststop = prestart.clone();
-		poststop.Timeout = 0;
-		poststop.Args = {
-			let mut v = RepeatedField::new();
-			v.push("poststop hook".to_string());
-			v
-		};
+        let mut poststop = prestart.clone();
+        poststop.Timeout = 0;
+        poststop.Args = {
+            let mut v = RepeatedField::new();
+            v.push("poststop hook".to_string());
+            v
+        };
 
-		let hooks = Hooks {
-			Prestart: RepeatedField::from_vec(vec![prestart]),
-			Poststart: RepeatedField::from_vec(vec![poststart]),
-			Poststop: RepeatedField::from_vec(vec![poststop]),
-			unknown_fields: UnknownFields::default(),
-			cached_size: CachedSize::default(),
-		};
+        let hooks = Hooks {
+            Prestart: RepeatedField::from_vec(vec![prestart]),
+            Poststart: RepeatedField::from_vec(vec![poststart]),
+            Poststop: RepeatedField::from_vec(vec![poststop]),
+            unknown_fields: UnknownFields::default(),
+            cached_size: CachedSize::default(),
+        };
 
-		oci.Hooks = SingularPtrField::some(hooks);
+        oci.Hooks = SingularPtrField::some(hooks);
 
-		info!("{:?}", oci);
-		*/
+        info!("{:?}", oci);
+        */
 
         // write spec to bundle path, hooks might
         // read ocispec
@@ -373,7 +373,7 @@ impl agentService {
         }
 
         if exit_pipe_r != -1 {
-			info!("reading exit pipe");
+            info!("reading exit pipe");
             let _ = unistd::read(exit_pipe_r, buf.as_mut_slice());
         }
 
