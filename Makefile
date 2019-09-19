@@ -29,6 +29,9 @@ TRIPLE = $(ARCH)-unknown-linux-$(LIBC)
 
 TARGET_PATH = target/$(TRIPLE)/$(BUILD_TYPE)/$(TARGET)
 
+DESTDIR :=
+BINDIR := /usr/bin
+
 # Display name of command and it's version (or a message if not available).
 #
 # Arguments:
@@ -47,6 +50,9 @@ $(TARGET_PATH): $(SOURCES) | show-summary
 
 show-header:
 	@printf "%s - version %s (commit %s)\n\n" "$(TARGET)" "$(VERSION)" "$(COMMIT_MSG)"
+
+install:
+	@install -D $(TARGET_PATH) $(DESTDIR)/$(BINDIR)/$(TARGET)
 
 clean:
 	@cargo clean
