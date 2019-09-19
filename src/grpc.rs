@@ -950,7 +950,19 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let rtnl = sandbox.rtnl.as_mut().unwrap();
 
-        let iface = rtnl.update_interface(interface.as_ref().unwrap()).unwrap();
+        let iface = match rtnl.update_interface(interface.as_ref().unwrap()) {
+            Ok(v) => v,
+            Err(_) => {
+                let f = sink
+                    .fail(RpcStatus::new(
+                        RpcStatusCode::Internal,
+                        Some("update interface".to_string()),
+                    ))
+                    .map_err(|_e| error!("update interface"));
+                ctx.spawn(f);
+                return;
+            }
+        };
 
         let f = sink
             .success(iface)
@@ -974,7 +986,24 @@ impl protocols::agent_grpc::AgentService for agentService {
         }
 
         let rtnl = sandbox.rtnl.as_mut().unwrap();
-        let v = rtnl.update_routes(rs.as_ref()).unwrap();
+        // get current routes to return when error out
+        let crs = match rtnl.list_routes() {
+            Ok(routes) => routes,
+            Err(_) => {
+                let f = sink
+                    .fail(RpcStatus::new(
+                        RpcStatusCode::Internal,
+                        Some("update routes".to_string()),
+                    ))
+                    .map_err(|_e| error!("update routes"));
+                ctx.spawn(f);
+                return;
+            }
+        };
+        let v = match rtnl.update_routes(rs.as_ref()) {
+            Ok(value) => value,
+            Err(_) => crs,
+        };
 
         routes.set_Routes(RepeatedField::from_vec(v));
 
@@ -999,7 +1028,19 @@ impl protocols::agent_grpc::AgentService for agentService {
         }
 
         let rtnl = sandbox.rtnl.as_mut().unwrap();
-        let v = rtnl.list_interfaces().unwrap();
+        let v = match rtnl.list_interfaces() {
+            Ok(value) => value,
+            Err(_) => {
+                let f = sink
+                    .fail(RpcStatus::new(
+                        RpcStatusCode::Internal,
+                        Some("list interface".to_string()),
+                    ))
+                    .map_err(|_e| error!("list interface"));
+                ctx.spawn(f);
+                return;
+            }
+        };
 
         interface.set_Interfaces(RepeatedField::from_vec(v));
 
@@ -1024,7 +1065,19 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let rtnl = sandbox.rtnl.as_mut().unwrap();
 
-        let v = rtnl.list_routes().unwrap();
+        let v = match rtnl.list_routes() {
+            Ok(value) => value,
+            Err(_) => {
+                let f = sink
+                    .fail(RpcStatus::new(
+                        RpcStatusCode::Internal,
+                        Some("list routes".to_string()),
+                    ))
+                    .map_err(|_e| error!("list routes"));
+                ctx.spawn(f);
+                return;
+            }
+        };
 
         routes.set_Routes(RepeatedField::from_vec(v));
 
