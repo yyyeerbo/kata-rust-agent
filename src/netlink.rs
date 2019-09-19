@@ -2217,6 +2217,7 @@ impl RtnlHandle {
                 rte.dst_len = (*rtm).rtm_dst_len;
                 rte.src_len = (*rtm).rtm_src_len;
                 rte.dest = None;
+                rte.protocol = (*rtm).rtm_protocol;
                 // destination
                 if t as i64 != 0 {
                     rte.dest = Some(getattr_var(t as *const rtattr));
@@ -2264,6 +2265,11 @@ impl RtnlHandle {
             if name.as_str().contains("lo") || name.as_str().contains("::1") {
                 continue;
             }
+
+            if r.protocol == RTPROTO_KERNEL {
+                continue;
+            }
+
             self.delete_one_route(r)?;
         }
 
@@ -2688,6 +2694,7 @@ pub struct RtRoute {
     pub scope: u8,
     pub dst_len: u8,
     pub src_len: u8,
+    pub protocol: u8,
 }
 
 impl Default for RtRoute {
@@ -2772,6 +2779,7 @@ impl From<Route> for RtRoute {
             index,
             gateway,
             scope: r.scope as u8,
+            protocol: RTPROTO_UNSPEC,
         }
     }
 }
