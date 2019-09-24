@@ -11,7 +11,6 @@ TARGET = $(PROJECT_COMPONENT)
 
 SOURCES := \
   $(shell find . 2>&1 | grep -E '.*\.rs$$') \
-  Cargo.lock \
   Cargo.toml
 
 VERSION_FILE := ./VERSION
