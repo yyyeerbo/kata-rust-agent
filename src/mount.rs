@@ -25,6 +25,7 @@ use std::io::{BufRead, BufReader};
 use crate::device::{get_pci_device_name, get_scsi_device_name, online_device};
 use crate::protocols::agent::Storage;
 use crate::Sandbox;
+use slog::Logger;
 
 const DRIVER9PTYPE: &'static str = "9p";
 const DRIVERVIRTIOFSTYPE: &'static str = "virtio-fs";
@@ -129,7 +130,7 @@ lazy_static! {
 
 // StorageHandler is the type of callback to be defined to handle every
 // type of storage driver.
-type StorageHandler = fn(&Storage, Arc<Mutex<Sandbox>>) -> Result<String>;
+type StorageHandler = fn(&Logger, &Storage, Arc<Mutex<Sandbox>>) -> Result<String>;
 
 // StorageHandlerList lists the supported drivers.
 #[cfg_attr(rustfmt, rustfmt_skip)]
@@ -161,19 +162,28 @@ pub struct BareMount<'a> {
     fs_type: &'a str,
     flags: MsFlags,
     options: &'a str,
+    logger: Logger,
 }
 
 // mount mounts a source in to a destination. This will do some bookkeeping:
 // * evaluate all symlinks
 // * ensure the source exists
 impl<'a> BareMount<'a> {
-    pub fn new(s: &'a str, d: &'a str, fs_type: &'a str, flags: MsFlags, options: &'a str) -> Self {
+    pub fn new(
+        s: &'a str,
+        d: &'a str,
+        fs_type: &'a str,
+        flags: MsFlags,
+        options: &'a str,
+        logger: &Logger,
+    ) -> Self {
         BareMount {
             source: s,
             destination: d,
             fs_type: fs_type,
             flags: flags,
             options: options,
+            logger: logger.new(o!("subsystem" => "baremount")),
         }
     }
 
@@ -214,8 +224,12 @@ impl<'a> BareMount<'a> {
         }
 
         info!(
+            self.logger,
             "mount source={:?}, dest={:?}, fs_type={:?}, options={:?}",
-            self.source, self.destination, self.fs_type, self.options
+            self.source,
+            self.destination,
+            self.fs_type,
+            self.options
         );
         let rc = unsafe { mount(source, dest, fs_type, self.flags.bits(), options) };
 
@@ -232,7 +246,11 @@ impl<'a> BareMount<'a> {
     }
 }
 
-fn ephemeral_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
+fn ephemeral_storage_handler(
+    logger: &Logger,
+    storage: &Storage,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<String> {
     let s = sandbox.clone();
     let mut sb = s.lock().unwrap();
     let new_storage = sb.set_sandbox_storage(&storage.mount_point);
@@ -245,10 +263,14 @@ fn ephemeral_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) ->
         return Err(err.into());
     }
 
-    common_storage_handler(storage)
+    common_storage_handler(logger, storage)
 }
 
-fn local_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
+fn local_storage_handler(
+    _logger: &Logger,
+    storage: &Storage,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<String> {
     let s = sandbox.clone();
     let mut sb = s.lock().unwrap();
     let new_storage = sb.set_sandbox_storage(&storage.mount_point);
@@ -276,26 +298,39 @@ fn local_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Res
     Ok("".to_string())
 }
 
-fn virtio9p_storage_handler(storage: &Storage, _sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
-    common_storage_handler(storage)
+fn virtio9p_storage_handler(
+    logger: &Logger,
+    storage: &Storage,
+    _sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<String> {
+    common_storage_handler(logger, storage)
 }
 
 // virtiommio_blk_storage_handler handles the storage for mmio blk driver.
 fn virtiommio_blk_storage_handler(
+    logger: &Logger,
     storage: &Storage,
     _sandbox: Arc<Mutex<Sandbox>>,
 ) -> Result<String> {
     //The source path is VmPath
-    common_storage_handler(storage)
+    common_storage_handler(logger, storage)
 }
 
 // virtiofs_storage_handler handles the storage for virtio-fs.
-fn virtiofs_storage_handler(storage: &Storage, _sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
-    common_storage_handler(storage)
+fn virtiofs_storage_handler(
+    logger: &Logger,
+    storage: &Storage,
+    _sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<String> {
+    common_storage_handler(logger, storage)
 }
 
 // virtio_blk_storage_handler handles the storage for blk driver.
-fn virtio_blk_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
+fn virtio_blk_storage_handler(
+    logger: &Logger,
+    storage: &Storage,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<String> {
     let mut storage = storage.clone();
     // If hot-plugged, get the device node path based on the PCI address else
     // use the virt path provided in Storage Source
@@ -311,29 +346,35 @@ fn virtio_blk_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -
         storage.source = dev_path;
     }
 
-    common_storage_handler(&storage)
+    common_storage_handler(logger, &storage)
 }
 
 // virtio_scsi_storage_handler handles the storage for scsi driver.
-fn virtio_scsi_storage_handler(storage: &Storage, sandbox: Arc<Mutex<Sandbox>>) -> Result<String> {
+fn virtio_scsi_storage_handler(
+    logger: &Logger,
+    storage: &Storage,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<String> {
     let mut storage = storage.clone();
 
     // Retrieve the device path from SCSI address.
     let dev_path = get_scsi_device_name(sandbox, &storage.source)?;
     storage.source = dev_path;
 
-    common_storage_handler(&storage)
+    common_storage_handler(logger, &storage)
 }
 
-fn common_storage_handler(storage: &Storage) -> Result<String> {
+fn common_storage_handler(logger: &Logger, storage: &Storage) -> Result<String> {
     // Mount the storage device.
     let mount_point = storage.mount_point.to_string();
 
-    mount_storage(storage).and(Ok(mount_point))
+    mount_storage(logger, storage).and(Ok(mount_point))
 }
 
 // mount_storage performs the mount described by the storage structure.
-fn mount_storage(storage: &Storage) -> Result<()> {
+fn mount_storage(logger: &Logger, storage: &Storage) -> Result<()> {
+    let logger = logger.new(o!("subsystem" => "mount"));
+
     match storage.fstype.as_str() {
         DRIVER9PTYPE | DRIVERVIRTIOFSTYPE => {
             let dest_path = Path::new(storage.mount_point.as_str());
@@ -351,6 +392,7 @@ fn mount_storage(storage: &Storage) -> Result<()> {
     let (flags, options) = parse_mount_flags_and_options(options_vec);
 
     info!(
+        logger,
         "mount storage as: mount-source: {},
                 mount-destination: {},
                 mount-fstype:      {},
@@ -367,6 +409,7 @@ fn mount_storage(storage: &Storage) -> Result<()> {
         storage.fstype.as_str(),
         flags,
         options.as_str(),
+        &logger,
     );
 
     bare_mount.mount()
@@ -400,22 +443,31 @@ fn parse_mount_flags_and_options(options_vec: Vec<&str>) -> (MsFlags, String) {
 // associated operations such as waiting for the device to show up, and mount
 // it to a specific location, according to the type of handler chosen, and for
 // each storage.
-pub fn add_storages(storages: Vec<Storage>, sandbox: Arc<Mutex<Sandbox>>) -> Result<Vec<String>> {
+pub fn add_storages(
+    logger: Logger,
+    storages: Vec<Storage>,
+    sandbox: Arc<Mutex<Sandbox>>,
+) -> Result<Vec<String>> {
     let mut mount_list = Vec::new();
 
     for storage in storages {
-        let handler = match STORAGEHANDLERLIST.get(storage.driver.as_str()) {
+        let handler_name = storage.driver.clone();
+        let logger = logger.new(o!(
+            "subsystem" => "storage",
+            "storage-type" => handler_name.to_owned()));
+
+        let handler = match STORAGEHANDLERLIST.get(&handler_name.as_str()) {
             None => {
                 return Err(ErrorKind::ErrorCode(format!(
                     "Failed to find the storage handler {}",
-                    storage.driver
+                    storage.driver.to_owned()
                 ))
                 .into());
             }
             Some(f) => f,
         };
 
-        let mount_point = match handler(&storage, sandbox.clone()) {
+        let mount_point = match handler(&logger, &storage, sandbox.clone()) {
             // Todo need to rollback the mounted storage if err met.
             Err(e) => return Err(e),
             Ok(m) => m,
@@ -429,12 +481,12 @@ pub fn add_storages(storages: Vec<Storage>, sandbox: Arc<Mutex<Sandbox>>) -> Res
     Ok(mount_list)
 }
 
-fn mount_to_rootfs(m: &INIT_MOUNT) -> Result<()> {
+fn mount_to_rootfs(logger: &Logger, m: &INIT_MOUNT) -> Result<()> {
     let options_vec: Vec<&str> = m.options.clone();
 
     let (flags, options) = parse_mount_flags_and_options(options_vec);
 
-    let bare_mount = BareMount::new(m.src, m.dest, m.fstype, flags, options.as_str());
+    let bare_mount = BareMount::new(m.src, m.dest, m.fstype, flags, options.as_str(), logger);
 
     fs::create_dir_all(Path::new(m.dest)).chain_err(|| "could not creat directory")?;
 
@@ -442,15 +494,20 @@ fn mount_to_rootfs(m: &INIT_MOUNT) -> Result<()> {
         if m.src != "dev" {
             return Err(err.into());
         }
-        error!("Could not mount filesystem from {} to {}", m.src, m.dest);
+        error!(
+            logger,
+            "Could not mount filesystem from {} to {}", m.src, m.dest
+        );
     }
 
     Ok(())
 }
 
-pub fn general_mount() -> Result<()> {
+pub fn general_mount(logger: &Logger) -> Result<()> {
+    let logger = logger.new(o!("subsystem" => "mount"));
+
     for m in INIT_ROOTFS_MOUNTS.iter() {
-        mount_to_rootfs(m)?;
+        mount_to_rootfs(&logger, m)?;
     }
 
     Ok(())
@@ -489,7 +546,7 @@ pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
     .into())
 }
 
-pub fn get_cgroup_mounts(cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
+pub fn get_cgroup_mounts(logger: &Logger, cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
     let file = File::open(&cg_path)?;
     let reader = BufReader::new(file);
 
@@ -529,7 +586,7 @@ pub fn get_cgroup_mounts(cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
     }
 
     if !has_device_cgroup {
-        warn!("The system didn't support device cgroup, which is dangerous, thus agent initialized without cgroup support!\n");
+        warn!(logger, "The system didn't support device cgroup, which is dangerous, thus agent initialized without cgroup support!\n");
         return Ok(Vec::new());
     }
 
@@ -543,11 +600,13 @@ pub fn get_cgroup_mounts(cg_path: &str) -> Result<Vec<INIT_MOUNT>> {
     Ok(cg_mounts)
 }
 
-pub fn cgroups_mount() -> Result<()> {
-    let cgroups = get_cgroup_mounts(PROCCGROUPS)?;
+pub fn cgroups_mount(logger: &Logger) -> Result<()> {
+    let logger = logger.new(o!("subsystem" => "mount"));
+
+    let cgroups = get_cgroup_mounts(&logger, PROCCGROUPS)?;
 
     for cg in cgroups.iter() {
-        mount_to_rootfs(cg)?;
+        mount_to_rootfs(&logger, cg)?;
     }
 
     // Enable memory hierarchical account.

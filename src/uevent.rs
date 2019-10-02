@@ -52,18 +52,22 @@ fn parse_uevent(message: &str) -> Uevent {
 }
 
 pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
+    let sref = sandbox.clone();
+    let s = sref.lock().unwrap();
+    let logger = s.logger.new(o!("subsystem" => "uevent"));
+
     thread::spawn(move || {
         let rtnl = RtnlHandle::new(NETLINK_UEVENT, 1).unwrap();
         loop {
             match rtnl.recv_message() {
-                Err(_) => error!("receive uevent message failed"),
+                Err(e) => error!(logger, "receive uevent message failed"; "error" => format!("{}", e)),
                 Ok(data) => {
                     let text = String::from_utf8(data);
                     match text {
-                        Err(_) => error!("failed to convert bytes to text.\n"),
+                        Err(e) => error!(logger, "failed to convert bytes to text"; "error" => format!("{}", e)),
                         Ok(text) => {
                             let event = parse_uevent(&text);
-                            info!("got uevent message: {:?}", event);
+                            info!(logger, "got uevent message"; "event" => format!("{:?}", event));
 
                             // Check if device hotplug event results in a device node being created.
                             if event.devname != ""
@@ -115,7 +119,12 @@ pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
                                     // Check memory hotplug and online if possible
                                     match online_device(online_path.as_ref()) {
                                         Ok(_) => (),
-                                        Err(_) => error!("failed online device {}", &event.devpath),
+                                        Err(e) => error!(
+                                            logger,
+                                            "failed to online device";
+                                            "device" => &event.devpath,
+                                            "error" => format!("{}", e),
+                                        ),
                                     }
                                 }
                             }

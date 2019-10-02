@@ -57,7 +57,14 @@ const SYSFS_MEMORY_HOTPLUG_PROBE_PATH: &'static str = "/sys/devices/system/memor
 pub const SYSFS_MEMORY_ONLINE_PATH: &'static str = "/sys/devices/system/memory";
 const CONTAINER_BASE: &'static str = "/run/agent";
 
-#[derive(Clone, Default)]
+// Convenience macro to obtain the scope logger
+macro_rules! sl {
+    () => {
+        slog_scope::logger()
+    };
+}
+
+#[derive(Clone)]
 struct agentService {
     sandbox: Arc<Mutex<Sandbox>>,
     test: u32,
@@ -75,7 +82,7 @@ impl agentService {
 
         let oci = oci_spec.as_mut().unwrap();
 
-        info!("receive createcontainer {}\n", &cid);
+        info!(sl!(), "receive createcontainer {}", &cid);
 
         // re-scan PCI bus
         // looking for hidden devices
@@ -96,7 +103,7 @@ impl agentService {
         // After all those storages have been processed, no matter the order
         // here, the agent will rely on rustjail (using the oci.Mounts
         // list) to bind mount all of them inside the container.
-        let m = add_storages(req.storages.to_vec(), self.sandbox.clone())?;
+        let m = add_storages(sl!(), req.storages.to_vec(), self.sandbox.clone())?;
         {
             sandbox = self.sandbox.clone();
             s = sandbox.lock().unwrap();
@@ -119,20 +126,21 @@ impl agentService {
             rootless_cgroup: false,
         };
 
-        let mut ctr: LinuxContainer = LinuxContainer::new(cid.as_str(), CONTAINER_BASE, opts)?;
+        let mut ctr: LinuxContainer =
+            LinuxContainer::new(cid.as_str(), CONTAINER_BASE, opts, &sl!())?;
 
         let p = if oci.Process.is_some() {
-            let tp = Process::new(oci.get_Process(), eid.as_str(), true)?;
+            let tp = Process::new(&sl!(), oci.get_Process(), eid.as_str(), true)?;
             tp
         } else {
-            info!("no process configurations!\n");
+            info!(sl!(), "no process configurations!");
             return Err(ErrorKind::Nix(nix::Error::from_errno(nix::errno::Errno::EINVAL)).into());
         };
 
         ctr.start(p)?;
 
         s.add_container(ctr);
-        info!("created container!\n");
+        info!(sl!(), "created container!");
 
         Ok(())
     }
@@ -244,7 +252,7 @@ impl agentService {
         let cid = req.container_id.clone();
         let exec_id = req.exec_id.clone();
 
-        info!("cid: {} eid: {}", cid.clone(), exec_id.clone());
+        info!(sl!(), "cid: {} eid: {}", cid.clone(), exec_id.clone());
 
         let s = Arc::clone(&self.sandbox);
         let mut sandbox = s.lock().unwrap();
@@ -256,7 +264,7 @@ impl agentService {
             return Err(ErrorKind::Nix(nix::Error::from_errno(nix::errno::Errno::EINVAL)).into());
         };
 
-        let p = Process::new(ocip, exec_id.as_str(), false)?;
+        let p = Process::new(&sl!(), ocip, exec_id.as_str(), false)?;
 
         let ctr = match sandbox.get_container(cid.as_str()) {
             Some(v) => v,
@@ -278,7 +286,12 @@ impl agentService {
         let s = Arc::clone(&self.sandbox);
         let mut sandbox = s.lock().unwrap();
 
-        info!("signal process: {}/{}", cid.clone(), eid.clone());
+        info!(
+            sl!(),
+            "signal process";
+            "container-id" => cid.clone(),
+            "exec-id" => eid.clone()
+        );
         let p = find_process(&mut sandbox, cid.as_str(), eid.as_str(), true)?;
 
         let mut signal = Signal::from_c_int(req.signal as i32).unwrap();
@@ -307,7 +320,12 @@ impl agentService {
         let mut exit_pipe_r: RawFd = -1;
         let mut buf: Vec<u8> = vec![0, 1];
 
-        info!("wait process: {}/{}", cid.clone(), eid.clone());
+        info!(
+            sl!(),
+            "wait process";
+            "container-id" => cid.clone(),
+            "exec-id" => eid.clone()
+        );
 
         {
             let mut sandbox = s.lock().unwrap();
@@ -322,7 +340,7 @@ impl agentService {
         }
 
         if exit_pipe_r != -1 {
-            info!("reading exit pipe");
+            info!(sl!(), "reading exit pipe");
             let _ = unistd::read(exit_pipe_r, buf.as_mut_slice());
         }
 
@@ -370,7 +388,12 @@ impl agentService {
         let cid = req.container_id.clone();
         let eid = req.exec_id.clone();
 
-        info!("write stdin for {}/{}", cid.clone(), eid.clone());
+        info!(
+            sl!(),
+            "write stdin";
+            "container-id" => cid.clone(),
+            "exec-id" => eid.clone()
+        );
 
         let s = Arc::clone(&self.sandbox);
         let mut sandbox = s.lock().unwrap();
@@ -392,11 +415,11 @@ impl agentService {
                     let f = sink.fail(RpcStatus::new(
                         RpcStatusCode::InvalidArgument,
                         Some(format!("write error"))))
-                    .map_err(|_e| error!("write error"));
+                    .map_err(|_e| error!(sl!(), "write error"));
                     ctx.spawn(f);
                     return;
                     */
-                    info!("write {} bytes", v);
+                    info!(sl!(), "write {} bytes", v);
                     l = v;
                 }
             }
@@ -425,7 +448,7 @@ impl agentService {
         let eid = req.exec_id;
 
         let mut fd: RawFd = -1;
-        // info!("read stdout for {}/{}", cid.clone(), eid.clone());
+        info!(sl!(), "read stdout for {}/{}", cid.clone(), eid.clone());
         {
             let s = Arc::clone(&self.sandbox);
             let mut sandbox = s.lock().unwrap();
@@ -469,14 +492,14 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some("fail to create container".to_string()),
                 ))
-                .map_err(|_e| error!("container create fail"));
+                .map_err(|_e| error!(sl!(), "container create fail"));
             ctx.spawn(f);
             return;
         } else {
             let resp = Empty::new();
             let f = sink
                 .success(resp)
-                .map_err(move |_e| error!("fail to create container"));
+                .map_err(move |_e| error!(sl!(), "fail to create container"));
             ctx.spawn(f);
         }
     }
@@ -493,17 +516,17 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some("fail to find container".to_string()),
                 ))
-                .map_err(move |_e| error!("get container fail"));
+                .map_err(move |_e| error!(sl!(), "get container fail"));
             ctx.spawn(f);
             return;
         }
 
-        info!("exec process!\n");
+        info!(sl!(), "exec process!\n");
 
         let resp = Empty::new();
         let f = sink
             .success(resp)
-            .map_err(move |_e| error!("fail to create container"));
+            .map_err(move |_e| error!(sl!(), "fail to create container"));
         ctx.spawn(f);
     }
 
@@ -519,13 +542,13 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some(String::from("fail to remove container")),
                 ))
-                .map_err(move |_e| error!("remove container failed"));
+                .map_err(move |_e| error!(sl!(), "remove container failed"));
             ctx.spawn(f);
         } else {
             let resp = Empty::new();
             let f = sink
                 .success(resp)
-                .map_err(|_e| error!("cannot destroy container"));
+                .map_err(|_e| error!(sl!(), "cannot destroy container"));
             ctx.spawn(f);
         }
     }
@@ -541,13 +564,13 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some(String::from("fail to exec process!")),
                 ))
-                .map_err(|_e| error!("fail to exec process!"));
+                .map_err(|_e| error!(sl!(), "fail to exec process!"));
             ctx.spawn(f);
         } else {
             let resp = Empty::new();
             let f = sink
                 .success(resp)
-                .map_err(move |_e| error!("cannot exec process"));
+                .map_err(move |_e| error!(sl!(), "cannot exec process"));
             ctx.spawn(f);
         }
     }
@@ -563,13 +586,13 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some(String::from("fail to signal process!")),
                 ))
-                .map_err(|_e| error!("fail to signal process!"));
+                .map_err(|_e| error!(sl!(), "fail to signal process!"));
             ctx.spawn(f);
         } else {
             let resp = Empty::new();
             let f = sink
                 .success(resp)
-                .map_err(|_e| error!("cannot signal process"));
+                .map_err(|_e| error!(sl!(), "cannot signal process"));
             ctx.spawn(f);
         }
     }
@@ -582,7 +605,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         if let Ok(resp) = self.do_wait_process(req) {
             let f = sink
                 .success(resp)
-                .map_err(|_e| error!("cannot wait process"));
+                .map_err(|_e| error!(sl!(), "cannot wait process"));
             ctx.spawn(f);
         } else {
             let f = sink
@@ -590,7 +613,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some(String::from("fail to wait process!")),
                 ))
-                .map_err(|_e| error!("fail to wait process!"));
+                .map_err(|_e| error!(sl!(), "fail to wait process!"));
             ctx.spawn(f);
         }
     }
@@ -617,7 +640,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                 resp.process_list = serde_json::to_vec(&pids).unwrap();
                 let f = sink
                     .success(resp)
-                    .map_err(|_e| error!("cannot handle json resp"));
+                    .map_err(|_e| error!(sl!(), "cannot handle json resp"));
                 ctx.spawn(f);
                 return;
             }
@@ -627,7 +650,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                         RpcStatusCode::InvalidArgument,
                         Some(String::from("invalid format")),
                     ))
-                    .map_err(|_e| error!("invalid format!"));
+                    .map_err(|_e| error!(sl!(), "invalid format!"));
                 ctx.spawn(f);
                 return;
             }
@@ -670,7 +693,7 @@ impl protocols::agent_grpc::AgentService for agentService {
             let fields: Vec<String> = line.split_whitespace().map(|v| v.to_string()).collect();
 
             if fields.len() < pid_index + 1 {
-                warn!("corrupted output?");
+                warn!(sl!(), "corrupted output?");
                 continue;
             }
             let pid = fields[pid_index].trim().parse::<i32>().unwrap();
@@ -686,7 +709,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let f = sink
             .success(resp)
-            .map_err(|_e| error!("list processes failed"));
+            .map_err(|_e| error!(sl!(), "list processes failed"));
         ctx.spawn(f);
     }
     fn update_container(
@@ -713,7 +736,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                             RpcStatusCode::Internal,
                             Some("internal error".to_string()),
                         ))
-                        .map_err(|_e| error!("internal error!"));
+                        .map_err(|_e| error!(sl!(), "internal error!"));
                     ctx.spawn(f);
                     return;
                 }
@@ -724,7 +747,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let f = sink
             .success(resp)
-            .map_err(|_e| error!("update container failed!"));
+            .map_err(|_e| error!(sl!(), "update container failed!"));
 
         ctx.spawn(f);
     }
@@ -747,7 +770,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                         RpcStatusCode::Internal,
                         Some("internal error!".to_string()),
                     ))
-                    .map_err(|_e| error!("internal error!"));
+                    .map_err(|_e| error!(sl!(), "internal error!"));
                 ctx.spawn(f);
                 return;
             }
@@ -757,7 +780,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let f = sink
             .success(resp)
-            .map_err(|_e| error!("stats containers failed!"));
+            .map_err(|_e| error!(sl!(), "stats containers failed!"));
         ctx.spawn(f);
     }
     fn pause_container(
@@ -783,7 +806,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         if let Ok(resp) = self.do_write_stream(req) {
             let f = sink
                 .success(resp)
-                .map_err(|_e| error!("writestream request failed!"));
+                .map_err(|_e| error!(sl!(), "writestream request failed!"));
 
             ctx.spawn(f);
         } else {
@@ -792,7 +815,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::InvalidArgument,
                     Some(String::from("write stream failed")),
                 ))
-                .map_err(move |_e| error!("write stream failed"));
+                .map_err(move |_e| error!(sl!(), "write stream failed"));
             ctx.spawn(f);
         }
     }
@@ -805,7 +828,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         if let Ok(resp) = self.do_read_stream(req, true) {
             let f = sink
                 .success(resp)
-                .map_err(move |_e| error!("read stdout error!"));
+                .map_err(move |_e| error!(sl!(), "read stdout error!"));
 
             ctx.spawn(f);
         } else {
@@ -814,7 +837,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some(String::from("failed to read stdout")),
                 ))
-                .map_err(move |_e| error!("read stdout failed"));
+                .map_err(move |_e| error!(sl!(), "read stdout failed"));
             ctx.spawn(f);
         }
     }
@@ -827,7 +850,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         if let Ok(resp) = self.do_read_stream(req, false) {
             let f = sink
                 .success(resp)
-                .map_err(move |_e| error!("read stderr error!"));
+                .map_err(move |_e| error!(sl!(), "read stderr error!"));
 
             ctx.spawn(f);
         } else {
@@ -836,7 +859,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some(String::from("failed to read stderr")),
                 ))
-                .map_err(move |_e| error!("read stderr failed"));
+                .map_err(move |_e| error!(sl!(), "read stderr failed"));
             ctx.spawn(f);
         }
     }
@@ -859,7 +882,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                         RpcStatusCode::InvalidArgument,
                         Some(String::from("invalid argument")),
                     ))
-                    .map_err(|_e| error!("invalid argument"));
+                    .map_err(|_e| error!(sl!(), "invalid argument"));
                 ctx.spawn(f);
                 return;
             }
@@ -879,7 +902,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let f = sink
             .success(resp)
-            .map_err(|_e| error!("close stdin failed"));
+            .map_err(|_e| error!(sl!(), "close stdin failed"));
         ctx.spawn(f);
     }
 
@@ -901,7 +924,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Unavailable,
                     Some("no tty".to_string()),
                 ))
-                .map_err(|_e| error!("tty resize"));
+                .map_err(|_e| error!(sl!(), "tty resize"));
             ctx.spawn(f);
             return;
         }
@@ -922,7 +945,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                         RpcStatusCode::Internal,
                         Some("ioctl error".to_string()),
                     ))
-                    .map_err(|_e| error!("ioctl error!"));
+                    .map_err(|_e| error!(sl!(), "ioctl error!"));
                 ctx.spawn(f);
                 return;
             }
@@ -931,7 +954,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let empty = protocols::empty::Empty::new();
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn update_interface(
@@ -958,7 +981,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                         RpcStatusCode::Internal,
                         Some("update interface".to_string()),
                     ))
-                    .map_err(|_e| error!("update interface"));
+                    .map_err(|_e| error!(sl!(), "update interface"));
                 ctx.spawn(f);
                 return;
             }
@@ -966,7 +989,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let f = sink
             .success(iface)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn update_routes(
@@ -995,7 +1018,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                         RpcStatusCode::Internal,
                         Some("update routes".to_string()),
                     ))
-                    .map_err(|_e| error!("update routes"));
+                    .map_err(|_e| error!(sl!(), "update routes"));
                 ctx.spawn(f);
                 return;
             }
@@ -1009,7 +1032,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let f = sink
             .success(routes)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
 
         ctx.spawn(f)
     }
@@ -1036,7 +1059,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                         RpcStatusCode::Internal,
                         Some("list interface".to_string()),
                     ))
-                    .map_err(|_e| error!("list interface"));
+                    .map_err(|_e| error!(sl!(), "list interface"));
                 ctx.spawn(f);
                 return;
             }
@@ -1046,7 +1069,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let f = sink
             .success(interface)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn list_routes(
@@ -1073,7 +1096,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                         RpcStatusCode::Internal,
                         Some("list routes".to_string()),
                     ))
-                    .map_err(|_e| error!("list routes"));
+                    .map_err(|_e| error!(sl!(), "list routes"));
                 ctx.spawn(f);
                 return;
             }
@@ -1083,7 +1106,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let f = sink
             .success(routes)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn start_tracing(
@@ -1092,12 +1115,12 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::StartTracingRequest,
         sink: ::grpcio::UnarySink<protocols::empty::Empty>,
     ) {
-        info!("start_tracing {:?} self.test={}", req, self.test);
+        info!(sl!(), "start_tracing {:?} self.test={}", req, self.test);
         self.test = 2;
         let empty = protocols::empty::Empty::new();
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn stop_tracing(
@@ -1109,7 +1132,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let empty = protocols::empty::Empty::new();
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn create_sandbox(
@@ -1143,13 +1166,13 @@ impl protocols::agent_grpc::AgentService for agentService {
                     grpcio::RpcStatus::new(grpcio::RpcStatusCode::FailedPrecondition, Some(err));
                 let f = sink
                     .fail(rpc_status)
-                    .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+                    .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
                 ctx.spawn(f);
                 return;
             }
         }
 
-        match add_storages(req.storages.to_vec(), self.sandbox.clone()) {
+        match add_storages(sl!(), req.storages.to_vec(), self.sandbox.clone()) {
             Ok(m) => {
                 let sandbox = self.sandbox.clone();
                 let mut s = sandbox.lock().unwrap();
@@ -1163,7 +1186,7 @@ impl protocols::agent_grpc::AgentService for agentService {
                 grpcio::RpcStatus::new(grpcio::RpcStatusCode::FailedPrecondition, Some(err));
             let f = sink
                 .fail(rpc_status)
-                .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+                .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
             ctx.spawn(f);
             return;
         }
@@ -1171,7 +1194,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let empty = protocols::empty::Empty::new();
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn destroy_sandbox(
@@ -1192,7 +1215,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         let empty = protocols::empty::Empty::new();
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn online_cpu_mem(
@@ -1213,14 +1236,14 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some("Internal error".to_string()),
                 ))
-                .map_err(|_e| error!("cannot online memory/cpu"));
+                .map_err(|_e| error!(sl!(), "cannot online memory/cpu"));
             ctx.spawn(f);
             return;
         }
 
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
 
         ctx.spawn(f)
     }
@@ -1237,14 +1260,14 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some("Internal error".to_string()),
                 ))
-                .map_err(|_e| error!("fail to reseed rng!"));
+                .map_err(|_e| error!(sl!(), "fail to reseed rng!"));
             ctx.spawn(f);
             return;
         }
 
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn get_guest_details(
@@ -1253,7 +1276,7 @@ impl protocols::agent_grpc::AgentService for agentService {
         req: protocols::agent::GuestDetailsRequest,
         sink: ::grpcio::UnarySink<protocols::agent::GuestDetailsResponse>,
     ) {
-        info!("get guest details!");
+        info!(sl!(), "get guest details!");
         let mut resp = GuestDetailsResponse::new();
         // to get memory block size
         match get_memory_info(req.mem_block_size, req.mem_hotplug_probe) {
@@ -1263,13 +1286,13 @@ impl protocols::agent_grpc::AgentService for agentService {
             }
 
             Err(_) => {
-                info!("fail to get memory info!");
+                info!(sl!(), "fail to get memory info!");
                 let f = sink
                     .fail(RpcStatus::new(
                         RpcStatusCode::Internal,
                         Some(String::from("internal error")),
                     ))
-                    .map_err(|_e| error!("cannot get memory info!"));
+                    .map_err(|_e| error!(sl!(), "cannot get memory info!"));
                 ctx.spawn(f);
                 return;
             }
@@ -1281,7 +1304,7 @@ impl protocols::agent_grpc::AgentService for agentService {
 
         let f = sink
             .success(resp)
-            .map_err(|_e| error!("cannot get guest detail"));
+            .map_err(|_e| error!(sl!(), "cannot get guest detail"));
         ctx.spawn(f);
     }
     fn mem_hotplug_by_probe(
@@ -1298,14 +1321,14 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some("internal error!".to_string()),
                 ))
-                .map_err(|_e| error!("cannont mem hotplug by probe!"));
+                .map_err(|_e| error!(sl!(), "cannont mem hotplug by probe!"));
             ctx.spawn(f);
             return;
         }
 
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn set_guest_date_time(
@@ -1321,14 +1344,14 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some("internal error!".to_string()),
                 ))
-                .map_err(|_e| error!("cannot set guest time!"));
+                .map_err(|_e| error!(sl!(), "cannot set guest time!"));
             ctx.spawn(f);
             return;
         }
 
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
     fn copy_file(
@@ -1344,14 +1367,14 @@ impl protocols::agent_grpc::AgentService for agentService {
                     RpcStatusCode::Internal,
                     Some("Internal error!".to_string()),
                 ))
-                .map_err(|_e| error!("cannot copy file!"));
+                .map_err(|_e| error!(sl!(), "cannot copy file!"));
             ctx.spawn(f);
             return;
         }
 
         let f = sink
             .success(empty)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
 }
@@ -1370,7 +1393,7 @@ impl protocols::health_grpc::Health for healthService {
 
         let f = sink
             .success(resp)
-            .map_err(|_e| error!("cannot get health status"));
+            .map_err(|_e| error!(sl!(), "cannot get health status"));
 
         ctx.spawn(f);
     }
@@ -1380,13 +1403,13 @@ impl protocols::health_grpc::Health for healthService {
         req: protocols::health::CheckRequest,
         sink: ::grpcio::UnarySink<protocols::health::VersionCheckResponse>,
     ) {
-        info!("version {:?}", req);
+        info!(sl!(), "version {:?}", req);
         let mut rep = protocols::health::VersionCheckResponse::new();
         rep.agent_version = AGENT_VERSION.to_string();
         rep.grpc_version = API_VERSION.to_string();
         let f = sink
             .success(rep)
-            .map_err(move |e| error!("failed to reply {:?}: {:?}", req, e));
+            .map_err(move |e| error!(sl!(), "failed to reply {:?}: {:?}", req, e));
         ctx.spawn(f)
     }
 }
@@ -1398,14 +1421,14 @@ fn get_memory_info(block_size: bool, hotplug: bool) -> Result<(u64, bool)> {
         match fs::read_to_string(SYSFS_MEMORY_BLOCK_SIZE_PATH) {
             Ok(v) => {
                 if v.len() == 0 {
-                    info!("string in empty???");
+                    info!(sl!(), "string in empty???");
                     return Err(ErrorKind::ErrorCode("Invalid block size".to_string()).into());
                 }
 
                 size = v.trim().parse::<u64>()?;
             }
             Err(e) => {
-                info!("memory block size error: {:?}", e.kind());
+                info!(sl!(), "memory block size error: {:?}", e.kind());
                 if e.kind() != std::io::ErrorKind::NotFound {
                     return Err(ErrorKind::Io(e).into());
                 }
@@ -1417,7 +1440,11 @@ fn get_memory_info(block_size: bool, hotplug: bool) -> Result<(u64, bool)> {
         match stat::stat(SYSFS_MEMORY_HOTPLUG_PROBE_PATH) {
             Ok(_) => plug = true,
             Err(e) => {
-                info!("hotplug memory error: {}", e.as_errno().unwrap().desc());
+                info!(
+                    sl!(),
+                    "hotplug memory error: {}",
+                    e.as_errno().unwrap().desc()
+                );
                 match e {
                     nix::Error::Sys(errno) => match errno {
                         Errno::ENOENT => plug = false,
@@ -1532,9 +1559,10 @@ pub fn start<S: Into<String>>(sandbox: Arc<Mutex<Sandbox>>, host: S, port: u16) 
         .build()
         .unwrap();
     server.start();
-    info!("gRPC server started");
+    info!(sl!(), "gRPC server started");
     for &(ref host, port) in server.bind_addrs() {
-        info!("listening on {}:{}", host, port);
+        info!(sl!(), "listening"; "host" => host,
+        "port" => port);
     }
 
     server
@@ -1598,7 +1626,7 @@ fn is_signal_handled(pid: pid_t, signum: u32) -> bool {
     let file = match File::open(&file_name) {
         Ok(f) => f,
         Err(_) => {
-            warn!("failed to open file {}\n", file_name);
+            warn!(sl!(), "failed to open file {}\n", file_name);
             return false;
         }
     };
@@ -1610,21 +1638,21 @@ fn is_signal_handled(pid: pid_t, signum: u32) -> bool {
         let line = match line {
             Ok(l) => l,
             Err(_) => {
-                warn!("failed to read file {}\n", file_name);
+                warn!(sl!(), "failed to read file {}\n", file_name);
                 return false;
             }
         };
         if line.starts_with("SigCgt:") {
             let mask_vec: Vec<&str> = line.split(":").collect();
             if mask_vec.len() != 2 {
-                warn!("parse the SigCgt field failed\n");
+                warn!(sl!(), "parse the SigCgt field failed\n");
                 return false;
             }
             let sig_cgt_str = mask_vec[1];
             let sig_cgt_mask = match u64::from_str_radix(sig_cgt_str, 16) {
                 Ok(h) => h,
                 Err(_) => {
-                    warn!("failed to parse the str {} to hex\n", sig_cgt_str);
+                    warn!(sl!(), "failed to parse the str {} to hex\n", sig_cgt_str);
                     return false;
                 }
             };
@@ -1733,7 +1761,11 @@ fn setup_bundle(gspec: &Spec) -> Result<()> {
     let config = format!("{}/{}", bundle_path, "config.json");
 
     let oci = rustjail::grpc_to_oci(gspec);
-    info!("{:?}", oci.process.as_ref().unwrap().console_size.as_ref());
+    info!(
+        sl!(),
+        "{:?}",
+        oci.process.as_ref().unwrap().console_size.as_ref()
+    );
     let _ = oci.save(config.as_str());
 
     unistd::chdir(bundle_path)?;

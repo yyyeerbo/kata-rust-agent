@@ -21,6 +21,7 @@ use nix::Result;
 
 use nix::Error;
 use protocols::oci::Process as OCIProcess;
+use slog::Logger;
 
 #[derive(Debug)]
 pub struct Process {
@@ -47,6 +48,7 @@ pub struct Process {
 
     pub exit_code: i32,
     pub oci: OCIProcess,
+    pub logger: Logger,
 }
 
 pub trait ProcessOperations {
@@ -70,7 +72,9 @@ impl ProcessOperations for Process {
 }
 
 impl Process {
-    pub fn new(ocip: &OCIProcess, id: &str, init: bool) -> Result<Self> {
+    pub fn new(logger: &Logger, ocip: &OCIProcess, id: &str, init: bool) -> Result<Self> {
+        let logger = logger.new(o!("subsystem" => "process"));
+
         let mut p = Process {
             exec_id: String::from(id),
             stdin: None,
@@ -89,9 +93,10 @@ impl Process {
             pid: -1,
             exit_code: 0,
             oci: ocip.clone(),
+            logger: logger.clone(),
         };
 
-        info!("before create console socket!\n");
+        info!(logger, "before create console socket!");
 
         if ocip.Terminal {
             let (psocket, csocket) = match socket::socketpair(
@@ -104,10 +109,10 @@ impl Process {
                 Err(e) => {
                     match e {
                         Error::Sys(errno) => {
-                            info!("socketpair: {}", errno.desc());
+                            info!(logger, "socketpair: {}", errno.desc());
                         }
                         _ => {
-                            info!("socketpair: other error!");
+                            info!(logger, "socketpair: other error!");
                         }
                     }
                     return Err(e);
@@ -117,7 +122,7 @@ impl Process {
             p.console_socket = Some(csocket);
         }
 
-        info!("created console socket!\n");
+        info!(logger, "created console socket!");
 
         let (stdin, pstdin) = unistd::pipe2(OFlag::O_CLOEXEC)?;
         p.parent_stdin = Some(pstdin);

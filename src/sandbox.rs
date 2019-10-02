@@ -16,12 +16,14 @@ use rustjail::container::BaseContainer;
 use rustjail::container::LinuxContainer;
 use rustjail::errors::*;
 use rustjail::process::Process;
+use slog::Logger;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::mpsc::Sender;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Sandbox {
+    pub logger: Logger,
     pub id: String,
     pub hostname: String,
     pub containers: HashMap<String, LinuxContainer>,
@@ -41,10 +43,12 @@ pub struct Sandbox {
 }
 
 impl Sandbox {
-    pub fn new() -> Result<Self> {
+    pub fn new(logger: &Logger) -> Result<Self> {
         let fs_type = get_mount_fs_type("/")?;
+        let logger = logger.new(o!("subsystem" => "sandbox"));
 
         Ok(Sandbox {
+            logger: logger,
             id: "".to_string(),
             hostname: "".to_string(),
             network: Network::new(),
@@ -125,7 +129,7 @@ impl Sandbox {
 
     pub fn setup_shared_namespaces(&mut self) -> Result<bool> {
         // Set up shared IPC namespace
-        self.shared_ipcns = match setup_persistent_ns(NSTYPEIPC) {
+        self.shared_ipcns = match setup_persistent_ns(self.logger.clone(), NSTYPEIPC) {
             Ok(ns) => ns,
             Err(err) => {
                 return Err(ErrorKind::ErrorCode(format!(
@@ -137,7 +141,7 @@ impl Sandbox {
         };
 
         // Set up shared UTS namespace
-        self.shared_utsns = match setup_persistent_ns(NSTYPEUTS) {
+        self.shared_utsns = match setup_persistent_ns(self.logger.clone(), NSTYPEUTS) {
             Ok(ns) => ns,
             Err(err) => {
                 return Err(ErrorKind::ErrorCode(format!(
@@ -200,18 +204,18 @@ impl Sandbox {
     pub fn online_cpu_memory(&self, req: &OnlineCPUMemRequest) -> Result<()> {
         if req.nb_cpus > 0 {
             // online cpus
-            online_cpus(req.nb_cpus as i32)?;
+            online_cpus(&self.logger, req.nb_cpus as i32)?;
         }
 
         if !req.cpu_only {
             // online memory
-            online_memory()?;
+            online_memory(&self.logger)?;
         }
 
         let cpuset = cgroups::fs::get_guest_cpuset()?;
 
         for (_, ctr) in self.containers.iter() {
-            info!("updating {}", ctr.id.as_str());
+            info!(self.logger, "updating {}", ctr.id.as_str());
             ctr.cgroup_manager
                 .as_ref()
                 .unwrap()
@@ -226,7 +230,7 @@ pub const CPU_ONLINE_PATH: &'static str = "/sys/devices/system/cpu";
 pub const MEMORY_ONLINE_PATH: &'static str = "/sys/devices/system/memory";
 pub const ONLINE_FILE: &'static str = "online";
 
-fn online_resources(path: &str, pattern: &str, num: i32) -> Result<i32> {
+fn online_resources(logger: &Logger, path: &str, pattern: &str, num: i32) -> Result<i32> {
     let mut count = 0;
     let re = Regex::new(pattern)?;
 
@@ -238,7 +242,7 @@ fn online_resources(path: &str, pattern: &str, num: i32) -> Result<i32> {
 
         if re.is_match(name) {
             let file = format!("{}/{}", p.to_str().unwrap(), ONLINE_FILE);
-            info!("{}", file.as_str());
+            info!(logger, "{}", file.as_str());
             let c = fs::read_to_string(file.as_str())?;
 
             if c.trim().contains("0") {
@@ -259,11 +263,11 @@ fn online_resources(path: &str, pattern: &str, num: i32) -> Result<i32> {
     Ok(0)
 }
 
-fn online_cpus(num: i32) -> Result<i32> {
-    online_resources(CPU_ONLINE_PATH, r"cpu[0-9]+", num)
+fn online_cpus(logger: &Logger, num: i32) -> Result<i32> {
+    online_resources(logger, CPU_ONLINE_PATH, r"cpu[0-9]+", num)
 }
 
-fn online_memory() -> Result<()> {
-    online_resources(MEMORY_ONLINE_PATH, r"memory[0-9]+", -1)?;
+fn online_memory(logger: &Logger) -> Result<()> {
+    online_resources(logger, MEMORY_ONLINE_PATH, r"memory[0-9]+", -1)?;
     Ok(())
 }

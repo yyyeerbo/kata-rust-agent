@@ -20,6 +20,13 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
 
+// Convenience macro to obtain the scope logger
+macro_rules! sl {
+    () => {
+        slog_scope::logger().new(o!("subsystem" => "cgroups"))
+    };
+}
+
 pub struct CpuSet();
 pub struct Cpu();
 pub struct Devices();
@@ -312,7 +319,7 @@ where
     T: ToString,
 {
     let p = format!("{}/{}", dir, file);
-    info!("{}", p.as_str());
+    info!(sl!(), "{}", p.as_str());
     fs::write(p.as_str(), v.to_string().as_bytes())?;
     Ok(())
 }
@@ -333,7 +340,7 @@ fn copy_parent(dir: &str, file: &str) -> Result<()> {
     match read_file(parent, file) {
         Ok(v) => {
             if !v.trim().is_empty() {
-                info!("value: \"{}\"", v.as_str().trim());
+                info!(sl!(), "value: \"{}\"", v.as_str().trim());
                 return write_file(dir, file, v);
             } else {
                 copy_parent(parent, file)?;
@@ -388,11 +395,11 @@ fn try_write_file<T: ToString>(dir: &str, file: &str, v: T) -> Result<()> {
         Err(e) => {
             let err = Errno::last();
             if err == Errno::EINVAL || err == Errno::ENODEV || err == Errno::ERANGE {
-                warn!("Invalid Arguments!");
+                warn!(sl!(), "Invalid Arguments!");
                 return Ok(());
             }
 
-            info!("{}", err.desc());
+            info!(sl!(), "{}", err.desc());
 
             return Err(e);
         }
@@ -445,7 +452,7 @@ impl Subsystem for CpuSet {
         }
 
         if !mems.is_empty() {
-            info!("{}", mems);
+            info!(sl!(), "{}", mems);
             try_write_file(dir, CPUSET_MEMS, mems)?;
         }
 
@@ -551,10 +558,10 @@ fn get_cpuacct_percpu_usage(dir: &str) -> Result<Vec<u64>> {
 fn get_percpu_usage(dir: &str, file: &str) -> Result<Vec<u64>> {
     let mut m = Vec::new();
     let p = format!("{}/{}", dir, file);
-    info!("{}", p.as_str());
+    info!(sl!(), "{}", p.as_str());
 
     for n in fs::read_to_string(p.as_str())?.split(' ') {
-        info!("{}", n);
+        info!(sl!(), "{}", n);
         if !n.trim().is_empty() {
             m.push(n.trim().parse::<u64>()?);
         }
@@ -572,13 +579,13 @@ impl CpuAcct {
         let usage_in_kernelmode =
             (((*h.get("system").unwrap() * NANO_PER_SECOND) as f64) / *CLOCK_TICKS) as u64;
 
-        info!("stat");
+        info!(sl!(), "stat");
 
         let total_usage = get_param_u64(dir, CPUACCT_USAGE)?;
-        info!("usage");
+        info!(sl!(), "usage");
 
         let percpu_usage = get_percpu_usage(dir, CPUACCT_PERCPU)?;
-        info!("percpu");
+        info!(sl!(), "percpu");
 
         Ok(CpuUsage {
             total_usage,
@@ -620,7 +627,7 @@ fn write_device(d: &LinuxDeviceCgroup, dir: &str) -> Result<()> {
         d.Access.as_str()
     );
 
-    info!("{}", v.as_str());
+    info!(sl!(), "{}", v.as_str());
 
     write_file(dir, file, v.as_str())
 }
@@ -770,12 +777,12 @@ impl Memory {
     fn get_stats(&self, dir: &str) -> Result<MemoryStats> {
         let h = get_param_key_u64(dir, MEMORY_STAT)?;
         let cache = *h.get("cache").unwrap();
-        info!("cache");
+        info!(sl!(), "cache");
 
         let value = get_param_u64(dir, MEM_HIERARCHY)?;
         let use_hierarchy = if value == 1 { true } else { false };
 
-        info!("hierarchy");
+        info!(sl!(), "hierarchy");
 
         // gte memory datas
         let usage = SingularPtrField::from_option(get_exist_memory_data(dir, "")?);
@@ -1136,7 +1143,7 @@ fn get_paths() -> Result<HashMap<String, String>> {
     for l in fs::read_to_string(PATHS)?.lines() {
         let fl: Vec<&str> = l.split(':').collect();
         if fl.len() != 3 {
-            info!("Corrupted cgroup data!");
+            info!(sl!(), "Corrupted cgroup data!");
             continue;
         }
 
@@ -1158,7 +1165,7 @@ fn get_mounts() -> Result<HashMap<String, String>> {
         let post: Vec<&str> = p[1].split(' ').collect();
 
         if post.len() != 3 {
-            warn!("mountinfo corrupted!");
+            warn!(sl!(), "mountinfo corrupted!");
             continue;
         }
 
@@ -1229,7 +1236,7 @@ pub const FROZEN: &'static str = "FROZEN";
 impl CgroupManager for Manager {
     fn apply(&self, pid: pid_t) -> Result<()> {
         for (key, value) in &self.paths {
-            info!("apply cgroup {}", key);
+            info!(sl!(), "apply cgroup {}", key);
             apply(value, pid)?;
         }
 
@@ -1240,7 +1247,7 @@ impl CgroupManager for Manager {
         for (key, value) in &self.paths {
             let _ = fs::create_dir_all(value);
             let sub = get_subsystem(key)?;
-            info!("setting cgroup {}", key);
+            info!(sl!(), "setting cgroup {}", key);
             sub.set(value, spec, update)?;
         }
 
@@ -1249,21 +1256,21 @@ impl CgroupManager for Manager {
 
     fn get_stats(&self) -> Result<CgroupStats> {
         // CpuStats
-        info!("cpu_usage");
+        info!(sl!(), "cpu_usage");
         let cpu_usage = if self.paths.get("cpuacct").is_some() {
             SingularPtrField::some(CpuAcct().get_stats(self.paths.get("cpuacct").unwrap())?)
         } else {
             SingularPtrField::none()
         };
 
-        info!("throttling_data");
+        info!(sl!(), "throttling_data");
         let throttling_data = if self.paths.get("cpu").is_some() {
             SingularPtrField::some(Cpu().get_stats(self.paths.get("cpu").unwrap())?)
         } else {
             SingularPtrField::none()
         };
 
-        info!("cpu_stats");
+        info!(sl!(), "cpu_stats");
         let cpu_stats = if cpu_usage.is_none() && throttling_data.is_none() {
             SingularPtrField::none()
         } else {
@@ -1276,7 +1283,7 @@ impl CgroupManager for Manager {
         };
 
         // Memorystats
-        info!("memory_stats");
+        info!(sl!(), "memory_stats");
         let memory_stats = if self.paths.get("memory").is_some() {
             SingularPtrField::some(Memory().get_stats(self.paths.get("memory").unwrap())?)
         } else {
@@ -1284,7 +1291,7 @@ impl CgroupManager for Manager {
         };
 
         // PidsStats
-        info!("pids_stats");
+        info!(sl!(), "pids_stats");
         let pids_stats = if self.paths.get("pids").is_some() {
             SingularPtrField::some(Pids().get_stats(self.paths.get("pids").unwrap())?)
         } else {
@@ -1292,7 +1299,7 @@ impl CgroupManager for Manager {
         };
 
         // BlkioStats
-        info!("blkio_stats");
+        info!(sl!(), "blkio_stats");
         let blkio_stats = if self.paths.get("blkio").is_some() {
             SingularPtrField::some(Blkio().get_stats(self.paths.get("blkio").unwrap())?)
         } else {
@@ -1300,7 +1307,7 @@ impl CgroupManager for Manager {
         };
 
         // HugetlbStats
-        info!("hugetlb_stats");
+        info!(sl!(), "hugetlb_stats");
         let hugetlb_stats = if self.paths.get("hugetlb").is_some() {
             HugeTLB().get_stats(self.paths.get("hugetlb").unwrap())?
         } else {
@@ -1448,7 +1455,7 @@ pub fn get_guest_cpuset() -> Result<String> {
     let m = get_mounts()?;
 
     if m.get("cpuset").is_none() {
-        warn!("no cpuset cgroup!");
+        warn!(sl!(), "no cpuset cgroup!");
         return Err(nix::Error::Sys(Errno::ENOENT).into());
     }
 

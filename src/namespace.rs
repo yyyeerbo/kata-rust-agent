@@ -14,6 +14,7 @@ use std::path::Path;
 use std::thread;
 
 use crate::mount::{BareMount, FLAGS};
+use slog::Logger;
 
 //use container::Process;
 
@@ -47,7 +48,7 @@ pub fn get_current_thread_ns_path(ns_type: &str) -> String {
 
 // setup_persistent_ns creates persistent namespace without switchin to it.
 // Note, pid namespaces cannot be persisted.
-pub fn setup_persistent_ns(ns_type: &'static str) -> Result<Namespace, String> {
+pub fn setup_persistent_ns(logger: Logger, ns_type: &'static str) -> Result<Namespace, String> {
     if let Err(err) = fs::create_dir_all(PERSISTENT_NS_DIR) {
         return Err(err.to_string());
     }
@@ -92,7 +93,7 @@ pub fn setup_persistent_ns(ns_type: &'static str) -> Result<Namespace, String> {
             None => (),
         };
 
-        let bare_mount = BareMount::new(source, destination, "none", flags, "");
+        let bare_mount = BareMount::new(source, destination, "none", flags, "", &logger);
 
         if let Err(err) = bare_mount.mount() {
             return Err(format!(

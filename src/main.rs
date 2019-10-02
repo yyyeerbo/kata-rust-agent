@@ -20,8 +20,6 @@
 #![allow(non_snake_case)]
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate log;
 extern crate prctl;
 extern crate protocols;
 extern crate regex;
@@ -32,8 +30,12 @@ extern crate signal_hook;
 extern crate scan_fmt;
 extern crate oci;
 
+#[macro_use]
+extern crate slog;
+extern crate slog_async;
+extern crate slog_json;
+
 use futures::*;
-use log::LevelFilter;
 use std::fs;
 //use std::io::Read;
 use std::{io, thread};
@@ -53,6 +55,7 @@ use std::sync::{Arc, Mutex};
 use unistd::Pid;
 
 mod device;
+mod logging;
 mod mount;
 mod namespace;
 pub mod netlink;
@@ -64,10 +67,12 @@ mod version;
 
 use mount::{cgroups_mount, general_mount};
 use sandbox::Sandbox;
+use slog::Logger;
 use uevent::watch_uevents;
 
 mod grpc;
 
+const NAME: &'static str = "kata-agent";
 const VSOCK_ADDR: &'static str = "vsock://-1";
 const VSOCK_PORT: u16 = 1024;
 
@@ -78,9 +83,24 @@ lazy_static! {
 
 use std::mem::MaybeUninit;
 
+fn announce(logger: &Logger) {
+    info!(logger, "announce";
+    "agent-commit" => env!("VERSION_COMMIT"),
+    "agent-version" =>  version::AGENT_VERSION,
+    "api-version" => version::API_VERSION,
+    );
+}
+
 fn main() -> Result<()> {
-    simple_logging::log_to_stderr(LevelFilter::Info);
-    // simple_logging::log_to_file("/run/log.agent", LevelFilter::Info);
+    let writer = io::stdout();
+    let logger = logging::create_logger(NAME, "agent", slog::Level::Info, writer);
+
+    announce(&logger);
+
+    // This "unused" variable is required as it enables the global (and crucially static) logger,
+    // which is required to satisfy the the lifetime constraints of the auto-generated gRPC code.
+    let _guard = slog_scope::set_global_logger(logger.new(o!("subsystem" => "grpc")));
+
     env::set_var("RUST_BACKTRACE", "full");
 
     lazy_static::initialize(&SHELLS);
@@ -95,18 +115,18 @@ fn main() -> Result<()> {
     };
 
     if unistd::getpid() == Pid::from_raw(1) {
-        init_agent_as_init()?;
+        init_agent_as_init(&logger)?;
     }
 
     // Initialize unique sandbox structure.
-    let s = Sandbox::new().map_err(|e| {
-        error!("Failed to create sandbox with error: {:?}", e);
+    let s = Sandbox::new(&logger).map_err(|e| {
+        error!(logger, "Failed to create sandbox with error: {:?}", e);
         e
     })?;
 
     let sandbox = Arc::new(Mutex::new(s));
 
-    setup_signal_handler(sandbox.clone()).unwrap();
+    setup_signal_handler(&logger, sandbox.clone()).unwrap();
     watch_uevents(sandbox.clone());
 
     let (tx, rx) = mpsc::channel::<i32>();
@@ -147,7 +167,9 @@ fn main() -> Result<()> {
 
 use nix::sys::wait::WaitPidFlag;
 
-fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+fn setup_signal_handler(logger: &Logger, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
+    let logger = logger.new(o!("subsystem" => "signals"));
+
     set_child_subreaper(true).map_err(|err| {
         format!(
             "failed  to setup agent as a child subreaper, failed with {}",
@@ -161,7 +183,7 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
 
     thread::spawn(move || {
         'outer: for sig in signals.forever() {
-            info!("Received signal {:?}", sig);
+            info!(logger, "received signal"; "signal" => sig);
 
             // sevral signals can be combined together
             // as one. So loop around to reap all
@@ -178,7 +200,11 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
                         s
                     }
                     Err(e) => {
-                        info!("reaper: waitpid error: {}", e.as_errno().unwrap().desc());
+                        info!(
+                            logger,
+                            "waitpid reaper failed";
+                            "error" => e.as_errno().unwrap().desc()
+                        );
                         continue 'outer;
                     }
                 };
@@ -186,17 +212,21 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
                 let pid = wait_status.pid();
                 if pid.is_some() {
                     let raw_pid = pid.unwrap().as_raw();
+                    let child_pid = format!("{}", raw_pid);
+
+                    let logger = logger.new(o!("child-pid" => child_pid));
+
                     let mut sandbox = s.lock().unwrap();
                     let process = sandbox.find_process(raw_pid);
                     if process.is_none() {
-                        info!("unexpected child exited {}", raw_pid);
+                        info!(logger, "child exited unexpectedly");
                         continue 'inner;
                     }
 
                     let mut p = process.unwrap();
 
                     if p.exit_pipe_w.is_none() {
-                        error!("the process's exit_pipe_w isn't set");
+                        error!(logger, "the process's exit_pipe_w isn't set");
                         continue 'inner;
                     }
                     let pipe_write = p.exit_pipe_w.unwrap();
@@ -206,7 +236,8 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
                         WaitStatus::Exited(_, c) => ret = c,
                         WaitStatus::Signaled(_, sig, _) => ret = sig as i32,
                         _ => {
-                            info!("got wrong status for process {}", raw_pid);
+                            info!(logger, "got wrong status for process";
+                                  "child-status" => format!("{:?}", wait_status));
                             continue 'inner;
                         }
                     }
@@ -222,9 +253,9 @@ fn setup_signal_handler(sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
 
 // init_agent_as_init will do the initializations such as setting up the rootfs
 // when this agent has been run as the init process.
-fn init_agent_as_init() -> Result<()> {
-    general_mount()?;
-    cgroups_mount()?;
+fn init_agent_as_init(logger: &Logger) -> Result<()> {
+    general_mount(logger)?;
+    cgroups_mount(logger)?;
 
     fs::remove_file(Path::new("/dev/ptmx"))?;
     unixfs::symlink(Path::new("/dev/pts/ptmx"), Path::new("/dev/ptmx"))?;

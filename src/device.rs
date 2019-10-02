@@ -22,6 +22,13 @@ use crate::GLOBAL_DEVICE_WATCHER;
 use protocols::agent::Device;
 use protocols::oci::Spec;
 
+// Convenience macro to obtain the scope logger
+macro_rules! sl {
+    () => {
+        slog_scope::logger().new(o!("subsystem" => "device"))
+    };
+}
+
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "x86",
@@ -128,8 +135,8 @@ pub fn get_device_pci_address(pci_id: &str) -> Result<String> {
     let bridge_device_pci_addr = format!("{}/{}", pci_bridge_addr, pci_device_addr);
 
     info!(
-        "Fetched PCI address for device PCIAddr:{}\n",
-        bridge_device_pci_addr
+        sl!(),
+        "Fetched PCI address for device PCIAddr:{}\n", bridge_device_pci_addr
     );
 
     Ok(bridge_device_pci_addr)
@@ -149,7 +156,7 @@ pub fn get_device_name(sandbox: Arc<Mutex<Sandbox>>, dev_addr: &str) -> Result<S
         for (key, value) in &(sb.pci_device_map) {
             if key.contains(dev_addr) {
                 dev_name = value.to_string();
-                info!("Device {} found in pci device map", dev_addr);
+                info!(sl!(), "Device {} found in pci device map", dev_addr);
                 break;
             }
         }
@@ -165,7 +172,7 @@ pub fn get_device_name(sandbox: Arc<Mutex<Sandbox>>, dev_addr: &str) -> Result<S
     }
 
     if dev_name == "" {
-        info!("Waiting on channel for device notification\n");
+        info!(sl!(), "Waiting on channel for device notification\n");
 
         match rx.recv_timeout(Duration::from_secs(TIMEOUT_HOTPLUG)) {
             Ok(name) => dev_name = name,
@@ -273,8 +280,8 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
     }
 
     info!(
-        "got the device: dev_path: {}, major: {}, minor: {}\n",
-        &device.vm_path, major_id, minor_id
+        sl!(),
+        "got the device: dev_path: {}, major: {}, minor: {}\n", &device.vm_path, major_id, minor_id
     );
 
     let devices = linux.Devices.as_mut_slice();
@@ -287,8 +294,12 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
             dev.Minor = minor_id as i64;
 
             info!(
+                sl!(),
                 "change the device from major: {} minor: {} to vm device major: {} minor: {}",
-                host_major, host_minor, major_id, minor_id
+                host_major,
+                host_minor,
+                major_id,
+                minor_id
             );
 
             // Resources must be updated since they are used to identify the
@@ -303,8 +314,8 @@ fn update_spec_device_list(device: &Device, spec: &mut Spec) -> Result<()> {
                         d.Minor = minor_id as i64;
 
                         info!(
-                            "set resources for device major: {} minor: {}\n",
-                            major_id, minor_id
+                            sl!(),
+                            "set resources for device major: {} minor: {}\n", major_id, minor_id
                         );
                     }
                 }
@@ -382,7 +393,7 @@ pub fn add_devices(
 fn add_device(device: &Device, spec: &mut Spec, sandbox: Arc<Mutex<Sandbox>>) -> Result<()> {
     // log before validation to help with debugging gRPC protocol
     // version differences.
-    info!("device-id: {}, device-type: {}, device-vm-path: {}, device-container-path: {}, device-options: {:?}",
+    info!(sl!(), "device-id: {}, device-type: {}, device-vm-path: {}, device-container-path: {}, device-options: {:?}",
           device.id, device.field_type, device.vm_path, device.container_path, device.options);
 
     if device.field_type == "" {

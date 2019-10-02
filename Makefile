@@ -21,6 +21,9 @@ COMMIT_NO_SHORT := $(shell git rev-parse --short HEAD 2>/dev/null || true)
 COMMIT := $(if $(shell git status --porcelain --untracked-files=no 2>/dev/null || true),${COMMIT_NO}-dirty,${COMMIT_NO})
 COMMIT_MSG = $(if $(COMMIT),$(COMMIT),unknown)
 
+# Exported to allow cargo to see it
+export VERSION_COMMIT := $(if $(COMMIT),$(VERSION)-$(COMMIT),$(VERSION))
+
 BUILD_TYPE = release
 
 ARCH = $(shell uname -m)
@@ -61,7 +64,7 @@ check:
 	@cargo test --target $(TRIPLE) --$(BUILD_TYPE)
 
 run:
-	@cargo run --target $(TRIPLE) --$(BUILD_TYPE)
+	@cargo run --target $(TRIPLE)
 
 show-summary: show-header
 	@printf "project:\n"
