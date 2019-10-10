@@ -28,7 +28,7 @@ extern crate lazy_static;
 extern crate libc;
 extern crate protobuf;
 #[macro_use]
-extern crate log;
+extern crate slog;
 #[macro_use]
 extern crate scan_fmt;
 extern crate oci;

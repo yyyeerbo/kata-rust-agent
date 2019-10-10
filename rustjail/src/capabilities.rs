@@ -11,6 +11,7 @@ use lazy_static;
 use crate::errors::*;
 use caps::{self, CapSet, Capability, CapsHashSet};
 use protocols::oci::LinuxCapabilities;
+use slog::Logger;
 use std::collections::HashMap;
 
 lazy_static! {
@@ -75,14 +76,14 @@ lazy_static! {
     };
 }
 
-fn to_capshashset(caps: &[String]) -> CapsHashSet {
+fn to_capshashset(logger: &Logger, caps: &[String]) -> CapsHashSet {
     let mut r = CapsHashSet::new();
 
     for cap in caps.iter() {
         let c = CAPSMAP.get(cap);
 
         if c.is_none() {
-            warn!("{} is not a cap", cap);
+            warn!(logger, "{} is not a cap", cap);
             continue;
         }
 
@@ -97,31 +98,37 @@ pub fn reset_effective() -> Result<()> {
     Ok(())
 }
 
-pub fn drop_priviledges(caps: &LinuxCapabilities) -> Result<()> {
+pub fn drop_priviledges(logger: &Logger, caps: &LinuxCapabilities) -> Result<()> {
+    let logger = logger.new(o!("subsystem" => "capabilities"));
+
     let all = caps::all();
 
-    for c in all.difference(&to_capshashset(caps.Bounding.as_ref())) {
+    for c in all.difference(&to_capshashset(&logger, caps.Bounding.as_ref())) {
         caps::drop(None, CapSet::Bounding, *c)?;
     }
 
     caps::set(
         None,
         CapSet::Effective,
-        to_capshashset(caps.Effective.as_ref()),
+        to_capshashset(&logger, caps.Effective.as_ref()),
     )?;
     caps::set(
         None,
         CapSet::Permitted,
-        to_capshashset(caps.Permitted.as_ref()),
+        to_capshashset(&logger, caps.Permitted.as_ref()),
     )?;
     caps::set(
         None,
         CapSet::Inheritable,
-        to_capshashset(caps.Inheritable.as_ref()),
+        to_capshashset(&logger, caps.Inheritable.as_ref()),
     )?;
 
-    if let Err(_) = caps::set(None, CapSet::Ambient, to_capshashset(caps.Ambient.as_ref())) {
-        warn!("failed to set ambient capability");
+    if let Err(_) = caps::set(
+        None,
+        CapSet::Ambient,
+        to_capshashset(&logger, caps.Ambient.as_ref()),
+    ) {
+        warn!(logger, "failed to set ambient capability");
     }
 
     Ok(())

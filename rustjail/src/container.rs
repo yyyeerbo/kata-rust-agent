@@ -49,6 +49,9 @@ use protobuf::{CachedSize, SingularPtrField, UnknownFields};
 use oci::State as OCIState;
 use std::collections::HashMap;
 
+#[macro_use]
+use slog::{debug, info, o, Logger};
+
 const STATE_FILENAME: &'static str = "state.json";
 const EXEC_FIFO_FILENAME: &'static str = "exec.fifo";
 const VER_MARKER: &'static str = "1.2.5";
@@ -217,6 +220,7 @@ pub struct LinuxContainer
     pub processes: HashMap<pid_t, Process>,
     pub status: Status,
     pub created: SystemTime,
+    pub logger: Logger,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -332,7 +336,7 @@ impl BaseContainer for LinuxContainer {
 
     fn start(&mut self, mut p: Process) -> Result<()> {
         let fifo_file = format!("{}/{}", &self.root, EXEC_FIFO_FILENAME);
-        info!("enter contianer.start!");
+        info!(self.logger, "enter container.start!");
         let mut fifofd: RawFd = -1;
         if p.init {
             if let Ok(_) = stat::stat(fifo_file.as_str()) {
@@ -347,7 +351,7 @@ impl BaseContainer for LinuxContainer {
                 Mode::from_bits(0).unwrap(),
             )?;
         }
-        info!("exec fifo opened!");
+        info!(self.logger, "exec fifo opened!");
 
         lazy_static::initialize(&NAMESPACES);
         lazy_static::initialize(&DEFAULT_DEVICES);
@@ -367,7 +371,7 @@ impl BaseContainer for LinuxContainer {
         let linux = spec.Linux.as_ref().unwrap();
         // get namespace vector to join/new
         let nses = get_namespaces(&linux, p.init, self.init_process_pid)?;
-        info!("got namespaces {:?}!\n", nses);
+        info!(self.logger, "got namespaces {:?}!\n", nses);
         let mut to_new = CloneFlags::empty();
         let mut to_join = Vec::new();
         let mut pidns = false;
@@ -386,11 +390,12 @@ impl BaseContainer for LinuxContainer {
                     Ok(v) => v,
                     Err(e) => {
                         info!(
+                            self.logger,
                             "cannot open type: {} path: {}",
                             ns.Type.clone(),
                             ns.Path.clone()
                         );
-                        info!("error is : {}", e.as_errno().unwrap().desc());
+                        info!(self.logger, "error is : {}", e.as_errno().unwrap().desc());
                         return Err(e.into());
                     }
                 };
@@ -411,6 +416,7 @@ impl BaseContainer for LinuxContainer {
         let st = self.oci_state()?;
 
         let (child, cfd) = match join_namespaces(
+            &self.logger,
             &spec,
             to_new,
             &to_join,
@@ -425,18 +431,18 @@ impl BaseContainer for LinuxContainer {
             Ok((u, v)) => (u, v),
             Err(e) => {
                 if parent == 0 {
-                    info!("parent process error out!");
+                    info!(self.logger, "parent process error out!");
                     return Err(e);
                 } else if parent == 1 {
-                    info!("child process 1 error out!");
+                    info!(self.logger, "child process 1 error out!");
                     std::process::exit(-1);
                 } else {
-                    info!("child process 2 error out!");
+                    info!(self.logger, "child process 2 error out!");
                     std::process::exit(-2);
                 }
             }
         };
-        info!("entered namespaces!");
+        info!(self.logger, "entered namespaces!");
         if child != Pid::from_raw(-1) {
             // parent
             p.pid = child.as_raw();
@@ -526,17 +532,17 @@ impl BaseContainer for LinuxContainer {
         setup_stdio(&p)?;
 
         if to_new.contains(CloneFlags::CLONE_NEWNS) {
-            info!("finish rootfs!");
+            info!(self.logger, "finish rootfs!");
             mount::finish_rootfs(spec)?;
         }
 
         if !p.oci.Cwd.is_empty() {
-            debug!("cwd: {}", p.oci.Cwd.as_str());
+            debug!(self.logger, "cwd: {}", p.oci.Cwd.as_str());
             unistd::chdir(p.oci.Cwd.as_str())?;
         }
 
         // setup uid/gid
-        info!("{:?}", p.oci.clone());
+        info!(self.logger, "{:?}", p.oci.clone());
 
         if p.oci.User.is_some() {
             let guser = p.oci.User.as_ref().unwrap();
@@ -562,8 +568,8 @@ impl BaseContainer for LinuxContainer {
 
         if p.oci.Capabilities.is_some() {
             let c = p.oci.Capabilities.as_ref().unwrap();
-            info!("drop capabilities!");
-            capabilities::drop_priviledges(c)?;
+            info!(self.logger, "drop capabilities!");
+            capabilities::drop_priviledges(&self.logger, c)?;
         }
 
         if p.init {
@@ -578,8 +584,8 @@ impl BaseContainer for LinuxContainer {
         // For exec process, only need to join existing namespaces,
         // the namespaces are got from init process or from
         // saved spec.
-        debug!("before setup execfifo!");
-        info!("{}", VER_MARKER);
+        debug!(self.logger, "before setup execfifo!");
+        info!(self.logger, "{}", VER_MARKER);
         if p.init {
             let fd = fcntl::open(
                 format!("/proc/self/fd/{}", fifofd).as_str(),
@@ -594,7 +600,7 @@ impl BaseContainer for LinuxContainer {
         // exec process
         let args = p.oci.Args.to_vec();
         let env = p.oci.Env.to_vec();
-        do_exec(&args[0], &args, &env)?;
+        do_exec(&self.logger, &args[0], &args, &env)?;
 
         Err(ErrorKind::ErrorCode("fail to create container".to_string()).into())
     }
@@ -620,10 +626,10 @@ impl BaseContainer for LinuxContainer {
         }
 
         if spec.Hooks.is_some() {
-            info!("poststop");
+            info!(self.logger, "poststop");
             let hooks = spec.Hooks.as_ref().unwrap();
             for h in hooks.Poststop.iter() {
-                execute_hook(h, &st)?;
+                execute_hook(&self.logger, h, &st)?;
             }
         }
 
@@ -648,7 +654,7 @@ impl BaseContainer for LinuxContainer {
         let fd = fcntl::open(fifo.as_str(), OFlag::O_WRONLY, Mode::from_bits_truncate(0))?;
         let data: &[u8] = &[0];
         unistd::write(fd, &data)?;
-        info!("container {} stared", &self.id);
+        info!(self.logger, "container {} stared", &self.id);
         self.init_process_start_time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
@@ -663,7 +669,9 @@ impl BaseContainer for LinuxContainer {
 
 use std::env;
 
-fn do_exec(path: &str, args: &[String], env: &[String]) -> Result<()> {
+fn do_exec(logger: &Logger, path: &str, args: &[String], env: &[String]) -> Result<()> {
+    let logger = logger.new(o!("command" => "exec"));
+
     let p = CString::new(path.to_string()).unwrap();
     let a: Vec<CString> = args
         .iter()
@@ -677,7 +685,7 @@ fn do_exec(path: &str, args: &[String], env: &[String]) -> Result<()> {
     for e in env.iter() {
         let v: Vec<&str> = e.split("=").collect();
         if v.len() != 2 {
-            info!("incorrect env config!");
+            info!(logger, "incorrect env config!");
         }
         env::set_var(v[0], v[1]);
     }
@@ -688,22 +696,22 @@ fn do_exec(path: &str, args: &[String], env: &[String]) -> Result<()> {
         .collect();
         */
     // execvp doesn't use env for the search path, so we set env manually
-    debug!("exec process right now!");
+    debug!(logger, "exec process right now!");
     if let Err(e) = unistd::execvp(&p, &a) {
-        info!("execve failed!!!");
-        info!("binary: {:?}, args: {:?}, envs: {:?}", p, a, env);
+        info!(logger, "execve failed!!!");
+        info!(logger, "binary: {:?}, args: {:?}, envs: {:?}", p, a, env);
         match e {
             nix::Error::Sys(errno) => {
-                info!("{}", errno.desc());
+                info!(logger, "{}", errno.desc());
             }
             Error::InvalidPath => {
-                info!("invalid path");
+                info!(logger, "invalid path");
             }
             Error::InvalidUtf8 => {
-                info!("invalid utf8");
+                info!(logger, "invalid utf8");
             }
             Error::UnsupportedOperation => {
-                info!("unsupported operation");
+                info!(logger, "unsupported operation");
             }
         }
         std::process::exit(-2);
@@ -801,6 +809,7 @@ fn write_sync(fd: RawFd, pid: pid_t) -> Result<()> {
 }
 
 fn join_namespaces(
+    logger: &Logger,
     spec: &Spec,
     to_new: CloneFlags,
     to_join: &Vec<(CloneFlags, RawFd)>,
@@ -812,6 +821,8 @@ fn join_namespaces(
     st: &OCIState,
     parent: &mut u32,
 ) -> Result<(Pid, RawFd)> {
+    let logger = logger.new(o!("action" => "join-namespaces"));
+
     // let ccond = Cond::new().chain_err(|| "create cond failed")?;
     // let pcond = Cond::new().chain_err(|| "create cond failed")?;
     let (pfd, cfd) = unistd::pipe2(OFlag::O_CLOEXEC).chain_err(|| "failed to create pipe")?;
@@ -832,10 +843,12 @@ fn join_namespaces(
             if userns {
                 // setup uid/gid mappings
                 write_mappings(
+                    &logger,
                     &format!("/proc/{}/uid_map", child.as_raw()),
                     &linux.UIDMappings,
                 )?;
                 write_mappings(
+                    &logger,
                     &format!("/proc/{}/gid_map", child.as_raw()),
                     &linux.GIDMappings,
                 )?;
@@ -844,7 +857,7 @@ fn join_namespaces(
             // apply cgroups
             if init {
                 if res.is_some() {
-                    info!("apply cgroups!");
+                    info!(logger, "apply cgroups!");
                     cm.set(res.unwrap(), false)?;
                 }
             }
@@ -856,8 +869,8 @@ fn join_namespaces(
             write_sync(pwfd, 0)?;
 
             let mut pid = child.as_raw();
-            info!("first child! {}", pid);
-            info!("wait for final child!");
+            info!(logger, "first child! {}", pid);
+            info!(logger, "wait for final child!");
             if pidns {
                 pid = read_sync(pfd)?;
                 // pfile.read_to_string(&mut json)?;
@@ -877,9 +890,9 @@ fn join_namespaces(
                 };
                 */
                 // notify child continue
-                info!("got final child pid! {}", pid);
+                info!(logger, "got final child pid! {}", pid);
                 write_sync(pwfd, 0)?;
-                info!("resume child!");
+                info!(logger, "resume child!");
                 // wait for child to exit
                 // Since the child would be reaped by our reaper, so
                 // there is no need reap the child here.
@@ -890,15 +903,15 @@ fn join_namespaces(
             // and the wait for child exit to get grandchild
 
             if init {
-                info!("wait for hook!");
+                info!(logger, "wait for hook!");
                 let _ = read_sync(pfd)?;
 
                 // run prestart hook
                 if spec.Hooks.is_some() {
-                    info!("prestart");
+                    info!(logger, "prestart");
                     let hooks = spec.Hooks.as_ref().unwrap();
                     for h in hooks.Prestart.iter() {
-                        execute_hook(h, st)?;
+                        execute_hook(&logger, h, st)?;
                     }
                 }
 
@@ -909,10 +922,10 @@ fn join_namespaces(
                 let _ = read_sync(pfd)?;
                 //run poststart hook
                 if spec.Hooks.is_some() {
-                    info!("poststart");
+                    info!(logger, "poststart");
                     let hooks = spec.Hooks.as_ref().unwrap();
                     for h in hooks.Poststart.iter() {
-                        execute_hook(h, st)?;
+                        execute_hook(&logger, h, st)?;
                     }
                 }
             }
@@ -983,8 +996,8 @@ fn join_namespaces(
                 }
         */
         if let Err(e) = sched::setns(fd, s) {
-            info!("setns error: {}", e.as_errno().unwrap().desc());
-            info!("setns: ns type: {:?}", s);
+            info!(logger, "setns error: {}", e.as_errno().unwrap().desc());
+            info!(logger, "setns: ns type: {:?}", s);
             if s == CloneFlags::CLONE_NEWUSER {
                 if e.as_errno().unwrap() != Errno::EINVAL {
                     return Err(e.into());
@@ -1001,7 +1014,7 @@ fn join_namespaces(
         }
     }
 
-    info!("to_new: {:?}", to_new);
+    info!(logger, "to_new: {:?}", to_new);
     sched::unshare(to_new & !CloneFlags::CLONE_NEWUSER)?;
 
     if userns {
@@ -1024,6 +1037,7 @@ fn join_namespaces(
                 write_sync(cfd, child.as_raw())?;
 
                 info!(
+                    logger,
                     "json: {}",
                     serde_json::to_string(&SyncPC {
                         pid: child.as_raw()
@@ -1031,7 +1045,7 @@ fn join_namespaces(
                     .unwrap()
                 );
                 // wait for parent read it and the continue
-                info!("after send out child pid!");
+                info!(logger, "after send out child pid!");
                 let _ = read_sync(crfd)?;
 
                 // notify child to continue.
@@ -1055,8 +1069,8 @@ fn join_namespaces(
 
     if to_new.contains(CloneFlags::CLONE_NEWNS) {
         // setup rootfs
-        info!("setup rootfs!");
-        mount::init_rootfs(&spec, &cm.paths, &cm.mounts, bind_device)?;
+        info!(logger, "setup rootfs!");
+        mount::init_rootfs(&logger, &spec, &cm.paths, &cm.mounts, bind_device)?;
     }
 
     // wait until parent notified
@@ -1092,18 +1106,18 @@ fn join_namespaces(
         set_sysctls(&linux.Sysctl)?;
         unistd::chdir("/")?;
         if let Err(_) = stat::stat("marker") {
-            info!("not in expect root!!");
+            info!(logger, "not in expect root!!");
         }
-        info!("in expect rootfs!");
+        info!(logger, "in expect rootfs!");
 
         if let Err(_) = stat::stat("/bin/sh") {
-            info!("no '/bin/sh'???");
+            info!(logger, "no '/bin/sh'???");
         }
     }
 
     // notify parent to continue before block on exec fifo
 
-    info!("rootfs: {}", &rootfs);
+    info!(logger, "rootfs: {}", &rootfs);
 
     // block on exec fifo
 
@@ -1175,7 +1189,7 @@ fn setup_stdio(p: &Process) -> Result<()> {
     Ok(())
 }
 
-fn write_mappings(path: &str, maps: &[LinuxIDMapping]) -> Result<()> {
+fn write_mappings(logger: &Logger, path: &str, maps: &[LinuxIDMapping]) -> Result<()> {
     let mut data = String::new();
     for m in maps {
         if m.Size == 0 {
@@ -1186,14 +1200,14 @@ fn write_mappings(path: &str, maps: &[LinuxIDMapping]) -> Result<()> {
         data = data + &val;
     }
 
-    info!("mapping: {}", data);
+    info!(logger, "mapping: {}", data);
     if !data.is_empty() {
         let fd = fcntl::open(path, OFlag::O_WRONLY, Mode::empty())?;
         defer!(unistd::close(fd).unwrap());
         match unistd::write(fd, data.as_bytes()) {
             Ok(_) => {}
             Err(e) => {
-                info!("cannot write mapping");
+                info!(logger, "cannot write mapping");
                 return Err(e.into());
             }
         }
@@ -1224,7 +1238,12 @@ fn setid(uid: Uid, gid: Gid) -> Result<()> {
 }
 
 impl LinuxContainer {
-    pub fn new<T: Into<String> + Display + Clone>(id: T, base: T, config: Config) -> Result<Self> {
+    pub fn new<T: Into<String> + Display + Clone>(
+        id: T,
+        base: T,
+        config: Config,
+        logger: &Logger,
+    ) -> Result<Self> {
         let base = base.into();
         let id = id.into();
         let root = format!("{}/{}", base.as_str(), id.as_str());
@@ -1282,6 +1301,7 @@ impl LinuxContainer {
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
+            logger: logger.new(o!("module" => "rustjail", "subsystem" => "container")),
         })
     }
 
@@ -1415,7 +1435,9 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-fn execute_hook(h: &Hook, st: &OCIState) -> Result<()> {
+fn execute_hook(logger: &Logger, h: &Hook, st: &OCIState) -> Result<()> {
+    let logger = logger.new(o!("action" => "execute-hook"));
+
     let binary = PathBuf::from(h.Path.as_str());
     let path = binary.canonicalize()?;
     if !path.exists() {
@@ -1432,7 +1454,8 @@ fn execute_hook(h: &Hook, st: &OCIState) -> Result<()> {
         ForkResult::Parent { child: _ch } => {
             let status = read_sync(rfd)?;
 
-            info!("hook child: {}", _ch);
+            info!(logger, "hook child: {}", _ch);
+
             // let _ = wait::waitpid(_ch,
             //	Some(WaitPidFlag::WEXITED | WaitPidFlag::__WALL));
 
@@ -1451,8 +1474,13 @@ fn execute_hook(h: &Hook, st: &OCIState) -> Result<()> {
 
         ForkResult::Child => {
             let (tx, rx) = mpsc::channel();
+            let (tx_logger, rx_logger) = mpsc::channel();
+
+            tx_logger.send(logger.clone()).unwrap();
 
             let handle = thread::spawn(move || {
+                let logger = rx_logger.recv().unwrap();
+
                 // write oci state to child
                 let env: HashMap<String, String> = envs
                     .iter()
@@ -1473,7 +1501,7 @@ fn execute_hook(h: &Hook, st: &OCIState) -> Result<()> {
 
                 //send out our pid
                 tx.send(child.id() as libc::pid_t).unwrap();
-                info!("hook grand: {}", child.id());
+                info!(logger, "hook grand: {}", child.id());
 
                 child
                     .stdin
@@ -1490,7 +1518,7 @@ fn execute_hook(h: &Hook, st: &OCIState) -> Result<()> {
                     .unwrap()
                     .read_to_string(&mut out)
                     .unwrap();
-                info!("{}", out.as_str());
+                info!(logger, "{}", out.as_str());
                 match child.wait() {
                     Ok(exit) => {
                         let code: i32 = if exit.success() {
@@ -1507,6 +1535,7 @@ fn execute_hook(h: &Hook, st: &OCIState) -> Result<()> {
 
                     Err(e) => {
                         info!(
+                            logger,
                             "wait child error: {} {}",
                             e.description(),
                             e.raw_os_error().unwrap()
@@ -1527,7 +1556,7 @@ fn execute_hook(h: &Hook, st: &OCIState) -> Result<()> {
             });
 
             let pid = rx.recv().unwrap();
-            info!("hook grand: {}", pid);
+            info!(logger, "hook grand: {}", pid);
 
             let status: i32 = if h.Timeout > 0 {
                 match rx.recv_timeout(Duration::from_secs(h.Timeout as u64)) {

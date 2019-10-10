@@ -27,6 +27,7 @@ use lazy_static;
 use std::string::ToString;
 
 use protobuf::{CachedSize, RepeatedField, UnknownFields};
+use slog::Logger;
 
 // Info reveals information about a particular mounted filesystem. This
 // struct is populated from the content in the /proc/<pid>/mountinfo file.
@@ -97,6 +98,7 @@ lazy_static! {
 }
 
 pub fn init_rootfs(
+    logger: &Logger,
     spec: &Spec,
     cpath: &HashMap<String, String>,
     mounts: &HashMap<String, String>,
@@ -132,7 +134,7 @@ pub fn init_rootfs(
             return Err(ErrorKind::Nix(nix::Error::Sys(Errno::EINVAL)).into());
         }
         if m.field_type == "cgroup" {
-            mount_cgroups(m, rootfs, flags, &data, cpath, mounts)?;
+            mount_cgroups(logger, m, rootfs, flags, &data, cpath, mounts)?;
         } else {
             if m.destination == "/dev" {
                 flags &= !MsFlags::MS_RDONLY;
@@ -155,6 +157,7 @@ pub fn init_rootfs(
 }
 
 fn mount_cgroups(
+    logger: &Logger,
     m: &Mount,
     rootfs: &str,
     flags: MsFlags,
@@ -173,7 +176,7 @@ fn mount_cgroups(
     };
 
     let cflags = MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV;
-    info!("tmpfs");
+    info!(logger, "tmpfs");
     mount_from(&ctm, rootfs, cflags, "", "")?;
     let olddir = unistd::getcwd()?;
 
@@ -183,7 +186,7 @@ fn mount_cgroups(
 
     // bind mount cgroups
     for (key, mount) in mounts.iter() {
-        info!("{}", key);
+        info!(logger, "{}", key);
         let source = if cpath.get(key).is_some() {
             cpath.get(key).unwrap()
         } else {
@@ -210,7 +213,7 @@ fn mount_cgroups(
 
         srcs.insert(source.to_string());
 
-        info!("{}", destination.as_str());
+        info!(logger, "{}", destination.as_str());
 
         let bm = Mount {
             source: source.to_string(),
@@ -234,6 +237,7 @@ fn mount_cgroups(
             match unix::fs::symlink(destination.as_str(), &src[1..]) {
                 Err(e) => {
                     info!(
+                        logger,
                         "symlink: {} {} err: {}",
                         key,
                         destination.as_str(),
@@ -438,7 +442,7 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
         match fs::create_dir_all(&dir) {
             Ok(_) => {}
             Err(e) => {
-                info!("creat dir {}: {}", dir.to_str().unwrap(), e.to_string());
+                //info!("creat dir {}: {}", dir.to_str().unwrap(), e.to_string());
             }
         }
 
@@ -452,7 +456,7 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
         PathBuf::from(&m.source)
     };
 
-    info!("{}, {}", src.to_str().unwrap(), dest.as_str());
+    //info!("{}, {}", src.to_str().unwrap(), dest.as_str());
 
     // ignore this check since some mount's src didn't been a directory
     // such as tmpfs.
@@ -468,7 +472,7 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
     match stat::stat(dest.as_str()) {
         Ok(_) => {}
         Err(e) => {
-            info!("{}: {}", dest.as_str(), e.as_errno().unwrap().desc());
+            //info!("{}: {}", dest.as_str(), e.as_errno().unwrap().desc());
         }
     }
 
@@ -481,7 +485,7 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
     ) {
         Ok(_) => {}
         Err(e) => {
-            info!("mount error: {}", e.as_errno().unwrap().desc());
+            //info!("mount error: {}", e.as_errno().unwrap().desc());
             return Err(e.into());
         }
     }
@@ -504,7 +508,7 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
             None::<&str>,
         ) {
             Err(e) => {
-                info!("remout {}: {}", dest.as_str(), e.as_errno().unwrap().desc());
+                //info!("remout {}: {}", dest.as_str(), e.as_errno().unwrap().desc());
                 return Err(e.into());
             }
             Ok(_) => {}
@@ -609,7 +613,7 @@ fn bind_dev(dev: &LinuxDevice) -> Result<()> {
 
 pub fn finish_rootfs(spec: &Spec) -> Result<()> {
     let olddir = unistd::getcwd()?;
-    info!("{}", olddir.to_str().unwrap());
+    //info!("{}", olddir.to_str().unwrap());
     unistd::chdir("/")?;
     if spec.Linux.is_some() {
         let linux = spec.Linux.as_ref().unwrap();
@@ -654,7 +658,7 @@ fn mask_path(path: &str) -> Result<()> {
         return Err(nix::Error::Sys(Errno::EINVAL).into());
     }
 
-    info!("{}", path);
+    //info!("{}", path);
 
     match mount::mount(
         Some("/dev/null"),
@@ -665,13 +669,13 @@ fn mask_path(path: &str) -> Result<()> {
     ) {
         Err(nix::Error::Sys(e)) => {
             if e != Errno::ENOENT && e != Errno::ENOTDIR {
-                info!("{}: {}", path, e.desc());
+                //info!("{}: {}", path, e.desc());
                 return Err(nix::Error::Sys(e).into());
             }
         }
 
         Err(e) => {
-            info!("{}: {}", path, e.as_errno().unwrap().desc());
+            //info!("{}: {}", path, e.as_errno().unwrap().desc());
             return Err(e.into());
         }
 
@@ -686,7 +690,7 @@ fn readonly_path(path: &str) -> Result<()> {
         return Err(nix::Error::Sys(Errno::EINVAL).into());
     }
 
-    info!("{}", path);
+    //info!("{}", path);
 
     match mount::mount(
         Some(&path[1..]),
@@ -699,13 +703,13 @@ fn readonly_path(path: &str) -> Result<()> {
             if e == Errno::ENOENT {
                 return Ok(());
             } else {
-                info!("{}: {}", path, e.desc());
+                //info!("{}: {}", path, e.desc());
                 return Err(nix::Error::Sys(e).into());
             }
         }
 
         Err(e) => {
-            info!("{}: {}", path, e.as_errno().unwrap().desc());
+            //info!("{}: {}", path, e.as_errno().unwrap().desc());
             return Err(e.into());
         }
 

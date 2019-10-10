@@ -19,6 +19,13 @@ use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
+// Convenience macro to obtain the scope logger
+macro_rules! sl {
+    () => {
+        slog_scope::logger().new(o!("subsystem" => "netlink"))
+    };
+}
+
 // define the struct, const, etc needed by
 // netlink operations
 
@@ -1361,7 +1368,7 @@ impl RtnlHandle {
 
             if done == 1 {
                 if dump_intr == 1 {
-                    info!("dump interuppted, maybe incomplete");
+                    info!(sl!(), "dump interuppted, maybe incomplete");
                 }
 
                 break;
@@ -1398,6 +1405,7 @@ impl RtnlHandle {
 
                 if (*nlh).nlmsg_len < NLMSG_SPACE!(mem::size_of::<ifinfomsg>()) {
                     info!(
+                        sl!(),
                         "invalid nlmsg! nlmsg_len: {}, nlmsg_space: {}",
                         (*nlh).nlmsg_len,
                         NLMSG_SPACE!(mem::size_of::<ifinfomsg>())
@@ -1444,6 +1452,7 @@ impl RtnlHandle {
                     let tlen = NLMSG_SPACE!(mem::size_of::<ifaddrmsg>());
                     if (*alh).nlmsg_len < tlen {
                         info!(
+                            sl!(),
                             "invalid nlmsg! nlmsg_len: {}, nlmsg_space: {}",
                             (*alh).nlmsg_len,
                             tlen
@@ -1566,6 +1575,7 @@ impl RtnlHandle {
 
                 if (*nlh).nlmsg_len < NLMSG_SPACE!(mem::size_of::<ifinfomsg>()) {
                     info!(
+                        sl!(),
                         "invalid nlmsg! nlmsg_len: {}, nlmsg_space: {}",
                         (*nlh).nlmsg_len,
                         NLMSG_SPACE!(mem::size_of::<ifinfomsg>())
@@ -1792,6 +1802,7 @@ impl RtnlHandle {
                 let tlen = NLMSG_SPACE!(mem::size_of::<ifaddrmsg>());
                 if (*nlh).nlmsg_len < tlen {
                     info!(
+                        sl!(),
                         "invalid nlmsg! nlmsg_len: {}, nlmsg_space: {}",
                         (*nlh).nlmsg_len,
                         tlen
@@ -1991,13 +2002,13 @@ impl RtnlHandle {
                 let ifi: *mut ifinfomsg = NLMSG_DATA!(nlh) as *mut ifinfomsg;
 
                 if (*nlh).nlmsg_type != RTM_NEWLINK && (*nlh).nlmsg_type != RTM_DELLINK {
-                    info!("wrong message!");
+                    info!(sl!(), "wrong message!");
                     continue;
                 }
 
                 let tlen = NLMSG_SPACE!(mem::size_of::<ifinfomsg>());
                 if (*nlh).nlmsg_len < tlen {
-                    info!("corrupt message?");
+                    info!(sl!(), "corrupt message?");
                     continue;
                 }
 
@@ -2034,13 +2045,14 @@ impl RtnlHandle {
                 let rtm: *const rtmsg = NLMSG_DATA!(nlh) as *const rtmsg;
 
                 if (*nlh).nlmsg_type != RTM_NEWROUTE && (*nlh).nlmsg_type != RTM_DELROUTE {
-                    info!("not route message!");
+                    info!(sl!(), "not route message!");
                     continue;
                 }
 
                 let tlen = NLMSG_SPACE!(mem::size_of::<rtmsg>());
                 if (*nlh).nlmsg_len < tlen {
                     info!(
+                        sl!(),
                         "invalid nlmsg! nlmsg_len: {}, nlmsg_spae: {}",
                         (*nlh).nlmsg_len,
                         tlen
@@ -2124,9 +2136,9 @@ impl RtnlHandle {
                         np);
 
                     if tn as i64 == 0 {
-                        info!("no name?");
+                        info!(sl!(), "no name?");
                     } else {
-                        info!("name(indextoname): {}", String::from_utf8(n)?);
+                        info!(sl!(), "name(indextoname): {}", String::from_utf8(n)?);
                     }
                     // std::process::exit(-1);
                     */
@@ -2177,13 +2189,14 @@ impl RtnlHandle {
                 let rtm: *const rtmsg = NLMSG_DATA!(nlh) as *const rtmsg;
 
                 if (*nlh).nlmsg_type != RTM_NEWROUTE && (*nlh).nlmsg_type != RTM_DELROUTE {
-                    info!("not route message!");
+                    info!(sl!(), "not route message!");
                     continue;
                 }
 
                 let tlen = NLMSG_SPACE!(mem::size_of::<rtmsg>());
                 if (*nlh).nlmsg_len < tlen {
                     info!(
+                        sl!(),
                         "invalid nlmsg! nlmsg_len: {}, nlmsg_spae: {}",
                         (*nlh).nlmsg_len,
                         tlen
@@ -2349,7 +2362,7 @@ impl RtnlHandle {
     }
 
     fn delete_one_route(&mut self, r: &RtRoute) -> Result<()> {
-        info!("delete route");
+        info!(sl!(), "delete route");
         let mut v: Vec<u8> = vec![0; 2048];
         unsafe {
             let mut nlh: *mut nlmsghdr = v.as_mut_ptr() as *mut nlmsghdr;
