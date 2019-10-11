@@ -7,19 +7,17 @@ use crate::configs::Config;
 use std::io::Result;
 
 pub trait Validator {
-	fn validate(&self, config: &Config) -> Result<()> {
-		Ok(())
-	}
+    fn validate(&self, config: &Config) -> Result<()> {
+        Ok(())
+    }
 }
 
-pub struct ConfigValidator {
-}
+pub struct ConfigValidator {}
 
-impl Validator for ConfigValidator {
-}
+impl Validator for ConfigValidator {}
 
 impl ConfigValidator {
-	fn new() -> Self {
-		ConfigValidator { }
-	}
+    fn new() -> Self {
+        ConfigValidator {}
+    }
 }
