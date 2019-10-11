@@ -60,11 +60,15 @@ pub fn watch_uevents(sandbox: Arc<Mutex<Sandbox>>) {
         let rtnl = RtnlHandle::new(NETLINK_UEVENT, 1).unwrap();
         loop {
             match rtnl.recv_message() {
-                Err(e) => error!(logger, "receive uevent message failed"; "error" => format!("{}", e)),
+                Err(e) => {
+                    error!(logger, "receive uevent message failed"; "error" => format!("{}", e))
+                }
                 Ok(data) => {
                     let text = String::from_utf8(data);
                     match text {
-                        Err(e) => error!(logger, "failed to convert bytes to text"; "error" => format!("{}", e)),
+                        Err(e) => {
+                            error!(logger, "failed to convert bytes to text"; "error" => format!("{}", e))
+                        }
                         Ok(text) => {
                             let event = parse_uevent(&text);
                             info!(logger, "got uevent message"; "event" => format!("{:?}", event));
