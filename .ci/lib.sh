@@ -25,7 +25,7 @@ clone_tests_repo()
 run_static_checks()
 {
 	clone_tests_repo
-	bash "$tests_repo_dir/.ci/static-checks.sh" "github.com/kata-containers/kata-rust-agent"
+	bash "$tests_repo_dir/.ci/static-checks.sh" "github.com/alipay/kata-rust-agent"
 }
 
 run_rust_test()
