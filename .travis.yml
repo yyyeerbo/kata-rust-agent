@@ -20,7 +20,7 @@ before_install:
     - ".ci/setup.sh"
     - ".ci/install_go.sh"
     - ".ci/install_rust.sh"
-    - ".ci/static_checks.sh"
+    - ".ci/static-checks.sh"
 
 # need to install rust from scratch?
 # still need go to download github.com/kata-containers/tests
