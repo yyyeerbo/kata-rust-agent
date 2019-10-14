@@ -49,7 +49,6 @@ use protobuf::{CachedSize, SingularPtrField, UnknownFields};
 use oci::State as OCIState;
 use std::collections::HashMap;
 
-#[macro_use]
 use slog::{debug, info, o, Logger};
 
 const STATE_FILENAME: &'static str = "state.json";

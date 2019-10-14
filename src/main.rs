@@ -3,18 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
-//extern crate oci;
-//extern crate rustjail;
-#![feature(map_get_key_value)]
 #![allow(non_camel_case_types)]
 #![allow(unused_parens)]
-// #![allow(deprecated)]
-// #![allow(unused_imports)]
-// #![allow(unreachable_code)]
-// #![allow(unused_assignments)]
-// #![allow(unused_variables)]
-// #![allow(unused_mut)]
-// #![allow(unused_must_use)]
 #![allow(unused_unsafe)]
 #![allow(dead_code)]
 #![allow(non_snake_case)]
