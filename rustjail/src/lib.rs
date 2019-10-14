@@ -35,6 +35,13 @@ extern crate oci;
 extern crate path_absolutize;
 extern crate regex;
 
+// Convenience macro to obtain the scope logger
+macro_rules! sl {
+    () => {
+        slog_scope::logger().new(o!("subsystem" => "rustjail"))
+    };
+}
+
 pub mod cgroups;
 pub mod container;
 pub mod errors;

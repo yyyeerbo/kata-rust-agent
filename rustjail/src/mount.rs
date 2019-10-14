@@ -442,7 +442,12 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
         match fs::create_dir_all(&dir) {
             Ok(_) => {}
             Err(e) => {
-                //info!("creat dir {}: {}", dir.to_str().unwrap(), e.to_string());
+                info!(
+                    sl!(),
+                    "creat dir {}: {}",
+                    dir.to_str().unwrap(),
+                    e.to_string()
+                );
             }
         }
 
@@ -456,7 +461,7 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
         PathBuf::from(&m.source)
     };
 
-    //info!("{}, {}", src.to_str().unwrap(), dest.as_str());
+    info!(sl!(), "{}, {}", src.to_str().unwrap(), dest.as_str());
 
     // ignore this check since some mount's src didn't been a directory
     // such as tmpfs.
@@ -472,7 +477,7 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
     match stat::stat(dest.as_str()) {
         Ok(_) => {}
         Err(e) => {
-            //info!("{}: {}", dest.as_str(), e.as_errno().unwrap().desc());
+            info!(sl!(), "{}: {}", dest.as_str(), e.as_errno().unwrap().desc());
         }
     }
 
@@ -485,7 +490,7 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
     ) {
         Ok(_) => {}
         Err(e) => {
-            //info!("mount error: {}", e.as_errno().unwrap().desc());
+            info!(sl!(), "mount error: {}", e.as_errno().unwrap().desc());
             return Err(e.into());
         }
     }
@@ -508,7 +513,12 @@ fn mount_from(m: &Mount, rootfs: &str, flags: MsFlags, data: &str, _label: &str)
             None::<&str>,
         ) {
             Err(e) => {
-                //info!("remout {}: {}", dest.as_str(), e.as_errno().unwrap().desc());
+                info!(
+                    sl!(),
+                    "remout {}: {}",
+                    dest.as_str(),
+                    e.as_errno().unwrap().desc()
+                );
                 return Err(e.into());
             }
             Ok(_) => {}
@@ -613,7 +623,7 @@ fn bind_dev(dev: &LinuxDevice) -> Result<()> {
 
 pub fn finish_rootfs(spec: &Spec) -> Result<()> {
     let olddir = unistd::getcwd()?;
-    //info!("{}", olddir.to_str().unwrap());
+    info!(sl!(), "{}", olddir.to_str().unwrap());
     unistd::chdir("/")?;
     if spec.Linux.is_some() {
         let linux = spec.Linux.as_ref().unwrap();
