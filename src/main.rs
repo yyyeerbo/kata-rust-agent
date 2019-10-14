@@ -268,11 +268,15 @@ const KERNEL_CMDLINE_FILE: &'static str = "/proc/cmdline";
 const CONSOLE_PATH: &'static str = "/dev/console";
 
 lazy_static! {
-    static ref SHELLS: Vec<String> = {
+    static ref SHELLS: Arc<Mutex<Vec<String>>> = {
         let mut v = Vec::new();
-        v.push("/bin/bash".to_string());
-        v.push("/bin/sh".to_string());
-        v
+
+        if !cfg!(test) {
+            v.push("/bin/bash".to_string());
+            v.push("/bin/sh".to_string());
+        }
+
+        Arc::new(Mutex::new(v))
     };
 }
 
@@ -308,21 +312,74 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 fn setup_debug_console() -> Result<()> {
-    for shell in SHELLS.iter() {
+    let shells_ref = SHELLS.clone();
+    let shells = shells_ref.lock().unwrap();
+
+    for shell in shells.iter() {
         let binary = PathBuf::from(shell);
         if binary.exists() {
             let f: RawFd = fcntl::open(CONSOLE_PATH, OFlag::O_RDWR, Mode::empty())?;
-            let mut cmd = Command::new(shell)
+            let cmd = Command::new(shell)
                 .stdin(unsafe { Stdio::from_raw_fd(f) })
                 .stdout(unsafe { Stdio::from_raw_fd(f) })
                 .stderr(unsafe { Stdio::from_raw_fd(f) })
-                .spawn()?;
+                .spawn();
+
+            let mut cmd = match cmd {
+                Ok(c) => c,
+                Err(_) => {
+                    return Err(ErrorKind::ErrorCode("failed to spawn shell".to_string()).into())
+                }
+            };
+
             cmd.wait()?;
 
             return Ok(());
+        } else {
+            return Err(ErrorKind::ErrorCode("invalid shell".to_string()).into());
         }
     }
 
-    // no shell
     Err(ErrorKind::ErrorCode("no shell".to_string()).into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_setup_debug_console_no_shells() {
+        let result = setup_debug_console();
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().to_string(), "Error Code: 'no shell'");
+    }
+
+    #[test]
+    fn test_setup_debug_console_invalid_shell() {
+        let dir = tempdir().expect("failed to create tmpdir");
+
+        // Add an invalid shell
+        let shell = dir
+            .path()
+            .join("enoent")
+            .to_str()
+            .expect("failed to construct shell path")
+            .to_string();
+
+        let shells_ref = SHELLS.clone();
+        let mut shells = shells_ref.lock().unwrap();
+        shells.push(shell);
+
+        drop(shells);
+
+        let result = setup_debug_console();
+
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Error Code: 'invalid shell'"
+        );
+    }
 }
