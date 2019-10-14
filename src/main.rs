@@ -162,7 +162,7 @@ fn setup_signal_handler(logger: &Logger, sandbox: Arc<Mutex<Sandbox>>) -> Result
 
     set_child_subreaper(true).map_err(|err| {
         format!(
-            "failed  to setup agent as a child subreaper, failed with {}",
+            "failed to setup agent as a child subreaper, failed with {}",
             err
         )
     })?;
