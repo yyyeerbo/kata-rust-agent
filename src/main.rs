@@ -26,10 +26,6 @@ extern crate slog_async;
 extern crate slog_json;
 
 use futures::*;
-use std::fs;
-//use std::io::Read;
-use std::{io, thread};
-//use lazy_static::{self, initialize};
 use nix::sys::wait::{self, WaitStatus};
 use nix::unistd;
 use prctl::set_child_subreaper;
@@ -37,11 +33,13 @@ use rustjail::errors::*;
 use signal_hook::{iterator::Signals, SIGCHLD};
 use std::collections::HashMap;
 use std::env;
+use std::fs;
 use std::os::unix::fs::{self as unixfs};
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
+use std::{io, thread};
 use unistd::Pid;
 
 mod device;
