@@ -27,7 +27,8 @@ before_install:
 # which is already installed?
 
 install:
-    - cd ${TRAVIS_BUILD_DIR} && make
+    - cd ${TRAVIS_BUILD_DIR} && make default
 
 script:
-    - cd ${TRAVIS_BUILD_DIR} && make check
+    - cd ${TRAVIS_BUILD_DIR} && make check || true
+    - ".ci/debug_scripts.sh"
