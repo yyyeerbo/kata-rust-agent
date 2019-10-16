@@ -60,7 +60,7 @@ clean:
 	@cargo clean
 
 check:
-	@cargo test --target $(TRIPLE) --$(BUILD_TYPE)
+	@cargo test --target $(TRIPLE)
 
 run:
 	@cargo run --target $(TRIPLE)
