@@ -43,6 +43,10 @@ define get_command_version
 $(shell printf "%s: %s\\n" $(1) "$(or $(shell $(1) --version 2>/dev/null), (not available))")
 endef
 
+define get_toolchain_version
+$(shell printf "%s: %s\\n" "toolchain" "$(or $(shell rustup show active-toolchain 2>/dev/null), (unknown))")
+endef
+
 default: $(TARGET) show-header
 
 $(TARGET): $(TARGET_PATH)
@@ -77,6 +81,7 @@ show-summary: show-header
 	@printf "  %s\n" "$(call get_command_version,cargo)"
 	@printf "  %s\n" "$(call get_command_version,rustc)"
 	@printf "  %s\n" "$(call get_command_version,rustup)"
+	@printf "  %s\n" "$(call get_toolchain_version)"
 	@printf "\n"
 
 help: show-summary
