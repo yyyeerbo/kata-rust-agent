@@ -92,7 +92,7 @@ fn main() -> Result<()> {
     env::set_var("RUST_BACKTRACE", "full");
 
     lazy_static::initialize(&SHELLS);
-    parse_cmdline()?;
+    parse_cmdline(KERNEL_CMDLINE_FILE)?;
 
     let shell_handle = if unsafe { DEBUG_CONSOLE } {
         thread::spawn(move || {
@@ -285,8 +285,8 @@ pub static mut DEBUG_CONSOLE: bool = false;
 pub static mut DEV_MODE: bool = false;
 // pub static mut TRACE_MODE: ;
 
-fn parse_cmdline() -> Result<()> {
-    let cmdline = fs::read_to_string(KERNEL_CMDLINE_FILE)?;
+fn parse_cmdline(file: &str) -> Result<()> {
+    let cmdline = fs::read_to_string(file)?;
     let params: Vec<&str> = cmdline.split_ascii_whitespace().collect();
     for param in params.iter() {
         if param.starts_with(DEBUG_CONSOLE_FLAG) {
@@ -346,6 +346,8 @@ fn setup_debug_console() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::File;
+    use std::io::Write;
     use tempfile::tempdir;
 
     #[test]
@@ -381,5 +383,162 @@ mod tests {
             result.unwrap_err().to_string(),
             "Error Code: 'invalid shell'"
         );
+    }
+
+    #[test]
+    fn test_parse_cmdline() {
+        #[derive(Debug)]
+        struct TestData<'a> {
+            contents: &'a str,
+            debug_console: bool,
+            dev_mode: bool,
+        }
+
+        let tests = &[
+            TestData {
+                contents: "",
+                debug_console: false,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "foo",
+                debug_console: false,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "foo bar",
+                debug_console: false,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "foo bar",
+                debug_console: false,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "foo agent bar",
+                debug_console: false,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "foo debug_console agent bar devmode",
+                debug_console: false,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "agent.debug_console",
+                debug_console: true,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "   agent.debug_console ",
+                debug_console: true,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "agent.debug_console foo",
+                debug_console: true,
+                dev_mode: false,
+            },
+            TestData {
+                contents: " agent.debug_console foo",
+                debug_console: true,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "foo agent.debug_console bar",
+                debug_console: true,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "foo agent.debug_console",
+                debug_console: true,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "foo agent.debug_console ",
+                debug_console: true,
+                dev_mode: false,
+            },
+            TestData {
+                contents: "agent.devmode",
+                debug_console: false,
+                dev_mode: true,
+            },
+            TestData {
+                contents: "   agent.devmode ",
+                debug_console: false,
+                dev_mode: true,
+            },
+            TestData {
+                contents: "agent.devmode foo",
+                debug_console: false,
+                dev_mode: true,
+            },
+            TestData {
+                contents: " agent.devmode foo",
+                debug_console: false,
+                dev_mode: true,
+            },
+            TestData {
+                contents: "foo agent.devmode bar",
+                debug_console: false,
+                dev_mode: true,
+            },
+            TestData {
+                contents: "foo agent.devmode",
+                debug_console: false,
+                dev_mode: true,
+            },
+            TestData {
+                contents: "foo agent.devmode ",
+                debug_console: false,
+                dev_mode: true,
+            },
+            TestData {
+                contents: "agent.devmode agent.debug_console",
+                debug_console: true,
+                dev_mode: true,
+            },
+        ];
+
+        let dir = tempdir().expect("failed to create tmpdir");
+
+        // First, check a missing file is handled
+        let file_path = dir.path().join("enoent");
+
+        let filename = file_path.to_str().expect("failed to create filename");
+
+        let result = parse_cmdline(&filename.to_owned());
+        assert!(result.is_err());
+
+        // Now, test various combinations of file contents
+        for (i, d) in tests.iter().enumerate() {
+            // Reset
+            unsafe {
+                DEBUG_CONSOLE = false;
+                DEV_MODE = false;
+            };
+
+            let msg = format!("test[{}]: {:?}", i, d);
+
+            let file_path = dir.path().join("cmdline");
+
+            let filename = file_path.to_str().expect("failed to create filename");
+
+            let mut file =
+                File::create(filename).expect(&format!("{}: failed to create file", msg));
+
+            file.write_all(d.contents.as_bytes())
+                .expect(&format!("{}: failed to write file contents", msg));
+
+            let result = parse_cmdline(filename);
+            assert!(result.is_ok(), "{}", msg);
+
+            unsafe {
+                assert_eq!(d.debug_console, DEBUG_CONSOLE, "{}", msg);
+                assert_eq!(d.dev_mode, DEV_MODE, "{}", msg);
+            };
+        }
     }
 }
