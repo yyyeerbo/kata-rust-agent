@@ -94,9 +94,14 @@ fn main() -> Result<()> {
     lazy_static::initialize(&SHELLS);
     parse_cmdline(KERNEL_CMDLINE_FILE)?;
 
+    let shells = SHELLS.clone();
+
     let shell_handle = if unsafe { DEBUG_CONSOLE } {
+        let thread_logger = logger.clone();
+
         thread::spawn(move || {
-            let _ = setup_debug_console();
+            let shells = shells.lock().unwrap();
+            let _ = setup_debug_console(shells.to_vec());
         })
     } else {
         unsafe { MaybeUninit::zeroed().assume_init() }
@@ -311,10 +316,7 @@ use std::os::unix::io::{FromRawFd, RawFd};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-fn setup_debug_console() -> Result<()> {
-    let shells_ref = SHELLS.clone();
-    let shells = shells_ref.lock().unwrap();
-
+fn setup_debug_console(shells: Vec<String>) -> Result<()> {
     for shell in shells.iter() {
         let binary = PathBuf::from(shell);
         if binary.exists() {
@@ -352,7 +354,14 @@ mod tests {
 
     #[test]
     fn test_setup_debug_console_no_shells() {
-        let result = setup_debug_console();
+        // Guarantee no shells have been added
+        // (required to avoid racing with
+        // test_setup_debug_console_invalid_shell()).
+        let shells_ref = SHELLS.clone();
+        let mut shells = shells_ref.lock().unwrap();
+        shells.clear();
+
+        let result = setup_debug_console(shells.to_vec());
 
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().to_string(), "Error Code: 'no shell'");
@@ -360,6 +369,9 @@ mod tests {
 
     #[test]
     fn test_setup_debug_console_invalid_shell() {
+        let shells_ref = SHELLS.clone();
+        let mut shells = shells_ref.lock().unwrap();
+
         let dir = tempdir().expect("failed to create tmpdir");
 
         // Add an invalid shell
@@ -370,13 +382,9 @@ mod tests {
             .expect("failed to construct shell path")
             .to_string();
 
-        let shells_ref = SHELLS.clone();
-        let mut shells = shells_ref.lock().unwrap();
         shells.push(shell);
 
-        drop(shells);
-
-        let result = setup_debug_console();
+        let result = setup_debug_console(shells.to_vec());
 
         assert!(result.is_err());
         assert_eq!(
