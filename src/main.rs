@@ -101,7 +101,12 @@ fn main() -> Result<()> {
 
         thread::spawn(move || {
             let shells = shells.lock().unwrap();
-            let _ = setup_debug_console(shells.to_vec());
+            let result = setup_debug_console(shells.to_vec());
+            if result.is_err() {
+                // Report error, but don't fail
+                warn!(thread_logger, "failed to setup debug console";
+                    "error" => format!("{}", result.unwrap_err()));
+            }
         })
     } else {
         unsafe { MaybeUninit::zeroed().assume_init() }
