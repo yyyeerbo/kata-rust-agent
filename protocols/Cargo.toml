@@ -5,6 +5,6 @@ authors = ["Hui Zhu <teawater@hyper.sh>"]
 edition = "2018"
 
 [dependencies]
-grpcio = { path = "../grpc-rs" }
+grpcio = { git="https://github.com/alipay/grpc-rs", branch="rust_agent" }
 protobuf = "2.6.1"
 futures = "0.1.27"

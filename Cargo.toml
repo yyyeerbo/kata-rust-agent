@@ -10,7 +10,7 @@ rustjail = { path = "rustjail" }
 protocols = { path = "protocols" }
 lazy_static = "1.3.0"
 error-chain = "0.12.1"
-grpcio = { path = "grpc-rs" }
+grpcio = { git="https://github.com/alipay/grpc-rs", branch="rust_agent" }
 protobuf = "2.6.1"
 futures = "0.1.27"
 libc = "0.2.58"
