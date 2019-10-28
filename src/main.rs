@@ -72,8 +72,12 @@ lazy_static! {
 use std::mem::MaybeUninit;
 
 fn announce(logger: &Logger) {
+    let commit = match env::var("VERSION_COMMIT") {
+        Ok(s) => s,
+        Err(_) => String::from(""),
+    };
     info!(logger, "announce";
-    "agent-commit" => env!("VERSION_COMMIT"),
+    "agent-commit" => commit.as_str(),
     "agent-version" =>  version::AGENT_VERSION,
     "api-version" => version::API_VERSION,
     );
