@@ -88,6 +88,7 @@ lazy_static! {
     };
 }
 
+#[derive(Debug, PartialEq)]
 pub struct INIT_MOUNT {
     fstype: &'static str,
     src: &'static str,
@@ -391,16 +392,11 @@ fn mount_storage(logger: &Logger, storage: &Storage) -> Result<()> {
     let options_vec = Vec::from_iter(options_vec.iter().map(String::as_str));
     let (flags, options) = parse_mount_flags_and_options(options_vec);
 
-    info!(
-        logger,
-        "mount storage as: mount-source: {},
-                mount-destination: {},
-                mount-fstype:      {},
-                mount-options:     {}\n",
-        storage.source.as_str(),
-        storage.mount_point.as_str(),
-        storage.fstype.as_str(),
-        options.as_str()
+    info!(logger, "mounting storage";
+    "mount-source:" => storage.source.as_str(),
+    "mount-destination" => storage.mount_point.as_str(),
+    "mount-fstype"  => storage.fstype.as_str(),
+    "mount-options" => options.as_str(),
     );
 
     let bare_mount = BareMount::new(
@@ -488,7 +484,7 @@ fn mount_to_rootfs(logger: &Logger, m: &INIT_MOUNT) -> Result<()> {
 
     let bare_mount = BareMount::new(m.src, m.dest, m.fstype, flags, options.as_str(), logger);
 
-    fs::create_dir_all(Path::new(m.dest)).chain_err(|| "could not creat directory")?;
+    fs::create_dir_all(Path::new(m.dest)).chain_err(|| "could not create directory")?;
 
     if let Err(err) = bare_mount.mount() {
         if m.src != "dev" {
@@ -513,14 +509,19 @@ pub fn general_mount(logger: &Logger) -> Result<()> {
     Ok(())
 }
 
+#[inline]
+pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
+    get_mount_fs_type_from_file(PROCMOUNTSTATS, mount_point)
+}
+
 // get_mount_fs_type returns the FS type corresponding to the passed mount point and
 // any error ecountered.
-pub fn get_mount_fs_type(mount_point: &str) -> Result<String> {
+pub fn get_mount_fs_type_from_file(mount_file: &str, mount_point: &str) -> Result<String> {
     if mount_point == "" {
-        return Err(ErrorKind::ErrorCode(format!("Invliad mount point {}", mount_point)).into());
+        return Err(ErrorKind::ErrorCode(format!("Invalid mount point {}", mount_point)).into());
     }
 
-    let file = File::open(PROCMOUNTSTATS)?;
+    let file = File::open(mount_file)?;
     let reader = BufReader::new(file);
 
     let re = Regex::new(format!("device .+ mounted on {} with fstype (.+)", mount_point).as_str())
@@ -558,15 +559,38 @@ pub fn get_cgroup_mounts(logger: &Logger, cg_path: &str) -> Result<Vec<INIT_MOUN
         options: vec!["nosuid", "nodev", "noexec", "mode=755"],
     }];
 
-    for (_, line) in reader.lines().enumerate() {
+    // #subsys_name    hierarchy       num_cgroups     enabled
+    // fields[0]       fields[1]       fields[2]       fields[3]
+    'outer: for (_, line) in reader.lines().enumerate() {
         let line = line?;
 
         let fields: Vec<&str> = line.split("\t").collect();
-        // #subsys_name    hierarchy       num_cgroups     enabled
-        // fields[0]       fields[1]       fields[2]       fields[3]
+
+        // Ignore comment header
+        if fields[0].starts_with("#") {
+            continue;
+        }
+
+        // Ignore truncated lines
+        if fields.len() < 4 {
+            continue;
+        }
+
+        // Ignore disabled cgroups
+        if fields[3] == "0" {
+            continue;
+        }
+
+        // Ignore fields containing invalid numerics
+        for f in [fields[1], fields[2], fields[3]].iter() {
+            if f.parse::<u64>().is_err() {
+                continue 'outer;
+            }
+        }
+
         match CGROUPS.get_key_value(fields[0]) {
             Some((key, value)) => {
-                if *key == "" || key.starts_with("#") || (fields.len() > 3 && fields[3] == "0") {
+                if *key == "" {
                     continue;
                 }
 
@@ -663,4 +687,610 @@ fn parse_options(option_list: Vec<String>) -> HashMap<String, String> {
     }
 
     options
+}
+
+#[cfg(test)]
+
+mod tests {
+    use super::*;
+    use libc::umount;
+    use std::fs::File;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    #[allow(unused_macros)]
+    macro_rules! skip_if_root {
+        () => {
+            if nix::unistd::Uid::effective().is_root() {
+                println!("INFO: skipping {} which needs non-root", module_path!());
+                return;
+            }
+        };
+    }
+
+    #[allow(unused_macros)]
+    macro_rules! skip_if_not_root {
+        () => {
+            if !nix::unistd::Uid::effective().is_root() {
+                println!("INFO: skipping {} which needs root", module_path!());
+                return;
+            }
+        };
+    }
+
+    #[allow(unused_macros)]
+    macro_rules! skip_loop_if_root {
+        ($msg:expr) => {
+            if nix::unistd::Uid::effective().is_root() {
+                println!(
+                    "INFO: skipping loop {} in {} which needs non-root",
+                    $msg,
+                    module_path!()
+                );
+                continue;
+            }
+        };
+    }
+
+    #[allow(unused_macros)]
+    macro_rules! skip_loop_if_not_root {
+        ($msg:expr) => {
+            if !nix::unistd::Uid::effective().is_root() {
+                println!(
+                    "INFO: skipping loop {} in {} which needs root",
+                    $msg,
+                    module_path!()
+                );
+                continue;
+            }
+        };
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum TestUserType {
+        RootOnly,
+        NonRootOnly,
+        Any,
+    }
+
+    #[test]
+    fn test_mount() {
+        #[derive(Debug)]
+        struct TestData<'a> {
+            // User(s) who can run this test
+            test_user: TestUserType,
+
+            src: &'a str,
+            dest: &'a str,
+            fs_type: &'a str,
+            flags: MsFlags,
+            options: &'a str,
+
+            // If set, assume an error will be generated,
+            // else assume no error.
+            //
+            // If not set, assume root required to perform a
+            // successful mount.
+            error_contains: &'a str,
+        }
+
+        let dir = tempdir().expect("failed to create tmpdir");
+        let drain = slog::Discard;
+        let logger = slog::Logger::root(drain, o!());
+
+        let tests = &[
+            TestData {
+                test_user: TestUserType::Any,
+                src: "",
+                dest: "",
+                fs_type: "",
+                flags: MsFlags::empty(),
+                options: "",
+                error_contains: "need mount source",
+            },
+            TestData {
+                test_user: TestUserType::Any,
+                src: "from",
+                dest: "",
+                fs_type: "",
+                flags: MsFlags::empty(),
+                options: "",
+                error_contains: "need mount destination",
+            },
+            TestData {
+                test_user: TestUserType::Any,
+                src: "from",
+                dest: "to",
+                fs_type: "",
+                flags: MsFlags::empty(),
+                options: "",
+                error_contains: "need mount FS type",
+            },
+            TestData {
+                test_user: TestUserType::NonRootOnly,
+                src: "from",
+                dest: "to",
+                fs_type: "bind",
+                flags: MsFlags::empty(),
+                options: "bind",
+                error_contains: "Operation not permitted",
+            },
+            TestData {
+                test_user: TestUserType::NonRootOnly,
+                src: "from",
+                dest: "to",
+                fs_type: "bind",
+                flags: MsFlags::MS_BIND,
+                options: "",
+                error_contains: "Operation not permitted",
+            },
+            TestData {
+                test_user: TestUserType::RootOnly,
+                src: "from",
+                dest: "to",
+                fs_type: "bind",
+                flags: MsFlags::MS_BIND,
+                options: "",
+                error_contains: "",
+            },
+        ];
+
+        for (i, d) in tests.iter().enumerate() {
+            let msg = format!("test[{}]: {:?}", i, d);
+
+            if d.test_user == TestUserType::RootOnly {
+                skip_loop_if_not_root!(msg);
+            } else if d.test_user == TestUserType::NonRootOnly {
+                skip_loop_if_root!(msg);
+            }
+
+            let src: PathBuf;
+            let dest: PathBuf;
+
+            let src_filename: String;
+            let dest_filename: String;
+
+            if d.src != "" {
+                src = dir.path().join(d.src.to_string());
+                src_filename = src
+                    .to_str()
+                    .expect("failed to convert src to filename")
+                    .to_string();
+            } else {
+                src_filename = "".to_owned();
+            }
+
+            if d.dest != "" {
+                dest = dir.path().join(d.dest.to_string());
+                dest_filename = dest
+                    .to_str()
+                    .expect("failed to convert dest to filename")
+                    .to_string();
+            } else {
+                dest_filename = "".to_owned();
+            }
+
+            // Create the mount directories
+            for d in [src_filename.clone(), dest_filename.clone()].iter() {
+                if d == "" {
+                    continue;
+                }
+
+                std::fs::create_dir_all(d).expect("failed to created directory");
+            }
+
+            let bare_mount = BareMount::new(
+                &src_filename,
+                &dest_filename,
+                d.fs_type,
+                d.flags,
+                d.options,
+                &logger,
+            );
+
+            let result = bare_mount.mount();
+
+            let msg = format!("{}: result: {:?}", msg, result);
+
+            if d.error_contains == "" {
+                assert!(result.is_ok(), msg);
+
+                // Cleanup
+                unsafe {
+                    let cstr_dest =
+                        CString::new(dest_filename).expect("failed to convert dest to cstring");
+                    let umount_dest = cstr_dest.as_ptr();
+
+                    let ret = umount(umount_dest);
+
+                    let msg = format!("{}: umount result: {:?}", msg, result);
+
+                    assert!(ret == 0, format!("{}", msg));
+                };
+
+                continue;
+            }
+
+            let err = result.unwrap_err();
+            let error_msg = format!("{}", err);
+            assert!(error_msg.contains(d.error_contains), msg);
+        }
+    }
+
+    #[test]
+    fn test_remove_mounts() {
+        skip_if_not_root!();
+
+        #[derive(Debug)]
+        struct TestData<'a> {
+            mounts: Vec<String>,
+
+            // If set, assume an error will be generated,
+            // else assume no error.
+            error_contains: &'a str,
+        }
+
+        let dir = tempdir().expect("failed to create tmpdir");
+        let drain = slog::Discard;
+        let logger = slog::Logger::root(drain, o!());
+
+        let test_dir_path = dir.path().join("dir");
+        let test_dir_filename = test_dir_path
+            .to_str()
+            .expect("failed to create mount dir filename");
+
+        let test_file_path = dir.path().join("file");
+        let test_file_filename = test_file_path
+            .to_str()
+            .expect("failed to create mount file filename");
+
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(test_file_filename)
+            .expect("failed to create test file");
+
+        std::fs::create_dir_all(test_dir_filename).expect("failed to create dir");
+
+        let mnt_src = dir.path().join("mnt-src");
+        let mnt_src_filename = mnt_src
+            .to_str()
+            .expect("failed to create mount source filename");
+
+        let mnt_dest = dir.path().join("mnt-dest");
+        let mnt_dest_filename = mnt_dest
+            .to_str()
+            .expect("failed to create mount destination filename");
+
+        for d in [test_dir_filename, mnt_src_filename, mnt_dest_filename].iter() {
+            std::fs::create_dir_all(d).expect(&format!("failed to create directory {}", d));
+        }
+
+        // Create an actual mount
+        let bare_mount = BareMount::new(
+            &mnt_src_filename,
+            &mnt_dest_filename,
+            "bind",
+            MsFlags::MS_BIND,
+            "",
+            &logger,
+        );
+
+        let result = bare_mount.mount();
+        assert!(result.is_ok(), "mount for test setup failed");
+
+        let tests = &[
+            TestData {
+                mounts: vec![],
+                error_contains: "",
+            },
+            TestData {
+                mounts: vec!["".to_string()],
+                error_contains: "ENOENT: No such file or directory",
+            },
+            TestData {
+                mounts: vec![test_file_filename.to_string()],
+                error_contains: "EINVAL: Invalid argument",
+            },
+            TestData {
+                mounts: vec![test_dir_filename.to_string()],
+                error_contains: "EINVAL: Invalid argument",
+            },
+            TestData {
+                mounts: vec![mnt_dest_filename.to_string()],
+                error_contains: "",
+            },
+        ];
+
+        for (i, d) in tests.iter().enumerate() {
+            let msg = format!("test[{}]: {:?}", i, d);
+
+            let result = remove_mounts(&d.mounts);
+
+            let msg = format!("{}: result: {:?}", msg, result);
+
+            if d.error_contains == "" {
+                assert!(result.is_ok(), msg);
+                continue;
+            }
+
+            let error_msg = format!("{}", result.unwrap_err());
+
+            assert!(error_msg.contains(d.error_contains), msg);
+        }
+    }
+
+    #[test]
+    fn test_get_mount_fs_type_from_file() {
+        #[derive(Debug)]
+        struct TestData<'a> {
+            // Create file with the specified contents
+            // (even if a nul string is specified).
+            contents: &'a str,
+            mount_point: &'a str,
+
+            // If set, assume an error will be generated,
+            // else assume no error.
+            error_contains: &'a str,
+
+            // successful return value
+            fs_type: &'a str,
+        }
+
+        let dir = tempdir().expect("failed to create tmpdir");
+
+        let tests = &[
+            TestData {
+                contents: "",
+                mount_point: "",
+                error_contains: "Invalid mount point",
+                fs_type: "",
+            },
+            TestData {
+                contents: "foo",
+                mount_point: "",
+                error_contains: "Invalid mount point",
+                fs_type: "",
+            },
+            TestData {
+                contents: "foo",
+                mount_point: "/",
+                error_contains: "failed to find FS type for mount point /",
+                fs_type: "",
+            },
+            TestData {
+                // contents missing fields
+                contents: "device /dev/mapper/root mounted on /",
+                mount_point: "/",
+                error_contains: "failed to find FS type for mount point /",
+                fs_type: "",
+            },
+            TestData {
+                contents: "device /dev/mapper/root mounted on / with fstype ext4",
+                mount_point: "/",
+                error_contains: "",
+                fs_type: "ext4",
+            },
+        ];
+
+        let enoent_file_path = dir.path().join("enoent");
+        let enoent_filename = enoent_file_path
+            .to_str()
+            .expect("failed to create enoent filename");
+
+        // First, test that an empty mount file is handled
+        for (i, mp) in ["/", "/somewhere", "/tmp", enoent_filename]
+            .iter()
+            .enumerate()
+        {
+            let msg = format!("missing mount file test[{}] with mountpoint: {}", i, mp);
+
+            let result = get_mount_fs_type_from_file("", mp);
+            let err = result.unwrap_err();
+
+            let msg = format!("{}: error: {}", msg, err);
+
+            assert!(
+                format!("{}", err).contains("No such file or directory"),
+                msg
+            );
+        }
+
+        // Now, test various combinations of file contents
+        for (i, d) in tests.iter().enumerate() {
+            let msg = format!("test[{}]: {:?}", i, d);
+
+            let file_path = dir.path().join("mount_stats");
+
+            let filename = file_path
+                .to_str()
+                .expect(&format!("{}: failed to create filename", msg));
+
+            let mut file =
+                File::create(filename).expect(&format!("{}: failed to create file", msg));
+
+            file.write_all(d.contents.as_bytes())
+                .expect(&format!("{}: failed to write file contents", msg));
+
+            let result = get_mount_fs_type_from_file(filename, d.mount_point);
+
+            // add more details if an assertion fails
+            let msg = format!("{}: result: {:?}", msg, result);
+
+            if d.error_contains == "" {
+                let fs_type = result.unwrap();
+
+                assert!(d.fs_type == fs_type, msg);
+
+                continue;
+            }
+
+            let error_msg = format!("{}", result.unwrap_err());
+            assert!(error_msg.contains(d.error_contains), msg);
+        }
+    }
+
+    #[test]
+    fn test_get_cgroup_mounts() {
+        #[derive(Debug)]
+        struct TestData<'a> {
+            // Create file with the specified contents
+            // (even if a nul string is specified).
+            contents: &'a str,
+
+            // If set, assume an error will be generated,
+            // else assume no error.
+            error_contains: &'a str,
+
+            // Set if the devices cgroup is expected to be found
+            devices_cgroup: bool,
+        }
+
+        let dir = tempdir().expect("failed to create tmpdir");
+        let drain = slog::Discard;
+        let logger = slog::Logger::root(drain, o!());
+
+        let first_mount = INIT_MOUNT {
+            fstype: "tmpfs",
+            src: "tmpfs",
+            dest: CGROUPPATH,
+            options: vec!["nosuid", "nodev", "noexec", "mode=755"],
+        };
+
+        let last_mount = INIT_MOUNT {
+            fstype: "tmpfs",
+            src: "tmpfs",
+            dest: CGROUPPATH,
+            options: vec!["remount", "ro", "nosuid", "nodev", "noexec", "mode=755"],
+        };
+
+        let cg_devices_mount = INIT_MOUNT {
+            fstype: "cgroup",
+            src: "cgroup",
+            dest: "/sys/fs/cgroup/devices",
+            options: vec!["nosuid", "nodev", "noexec", "relatime", "devices"],
+        };
+
+        let enoent_file_path = dir.path().join("enoent");
+        let enoent_filename = enoent_file_path
+            .to_str()
+            .expect("failed to create enoent filename");
+
+        let tests = &[
+            TestData {
+                // Empty file
+                contents: "",
+                error_contains: "",
+                devices_cgroup: false,
+            },
+            TestData {
+                // Only a comment line
+                contents: "#subsys_name	hierarchy	num_cgroups	enabled",
+                error_contains: "",
+                devices_cgroup: false,
+            },
+            TestData {
+                // Single (invalid) field
+                contents: "foo",
+                error_contains: "",
+                devices_cgroup: false,
+            },
+            TestData {
+                // Multiple (invalid) fields
+                contents: "this\tis\tinvalid\tdata\n",
+                error_contains: "",
+                devices_cgroup: false,
+            },
+            TestData {
+                // Valid first field, but other fields missing
+                contents: "devices\n",
+                error_contains: "",
+                devices_cgroup: false,
+            },
+            TestData {
+                // Valid first field, but invalid others fields
+                contents: "devices\tinvalid\tinvalid\tinvalid\n",
+                error_contains: "",
+                devices_cgroup: false,
+            },
+            TestData {
+                // Valid first field, but lots of invalid others fields
+                contents: "devices\tinvalid\tinvalid\tinvalid\tinvalid\tinvalid\n",
+                error_contains: "",
+                devices_cgroup: false,
+            },
+            TestData {
+                // Valid, but disabled
+                contents: "devices\t1\t1\t0\n",
+                error_contains: "",
+                devices_cgroup: false,
+            },
+            TestData {
+                // Valid
+                contents: "devices\t1\t1\t1\n",
+                error_contains: "",
+                devices_cgroup: true,
+            },
+        ];
+
+        // First, test a missing file
+        let result = get_cgroup_mounts(&logger, enoent_filename);
+
+        assert!(result.is_err());
+        let error_msg = format!("{}", result.unwrap_err());
+        assert!(
+            error_msg.contains("No such file or directory"),
+            "enoent test"
+        );
+
+        for (i, d) in tests.iter().enumerate() {
+            let msg = format!("test[{}]: {:?}", i, d);
+
+            let file_path = dir.path().join("cgroups");
+            let filename = file_path
+                .to_str()
+                .expect("failed to create cgroup file filename");
+
+            let mut file =
+                File::create(filename).expect(&format!("{}: failed to create file", msg));
+
+            file.write_all(d.contents.as_bytes())
+                .expect(&format!("{}: failed to write file contents", msg));
+
+            let result = get_cgroup_mounts(&logger, filename);
+            let msg = format!("{}: result: {:?}", msg, result);
+
+            if d.error_contains != "" {
+                assert!(result.is_err(), msg);
+
+                let error_msg = format!("{}", result.unwrap_err());
+                assert!(error_msg.contains(d.error_contains), msg);
+                continue;
+            }
+
+            assert!(result.is_ok(), msg);
+
+            let mounts = result.unwrap();
+            let count = mounts.len();
+
+            if !d.devices_cgroup {
+                assert!(count == 0, msg);
+                continue;
+            }
+
+            // get_cgroup_mounts() adds the device cgroup plus two other mounts.
+            assert!(count == (1 + 2), msg);
+
+            // First mount
+            assert!(mounts[0].eq(&first_mount), msg);
+
+            // Last mount
+            assert!(mounts[2].eq(&last_mount), msg);
+
+            // Devices cgroup
+            assert!(mounts[1].eq(&cg_devices_mount), msg);
+        }
+    }
 }
