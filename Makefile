@@ -52,7 +52,7 @@ default: $(TARGET) show-header
 $(TARGET): $(TARGET_PATH)
 
 $(TARGET_PATH): $(SOURCES) | show-summary
-	@cargo build --target $(TRIPLE) --$(BUILD_TYPE)
+	@cargo build --target $(TRIPLE)
 
 show-header:
 	@printf "%s - version %s (commit %s)\n\n" "$(TARGET)" "$(VERSION)" "$(COMMIT_MSG)"
